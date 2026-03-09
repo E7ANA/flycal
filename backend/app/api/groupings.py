@@ -30,6 +30,8 @@ def _cluster_to_read(cluster: GroupingCluster) -> GroupingClusterRead:
         grade_id=cluster.grade_id,
         source_class_ids=[c.id for c in cluster.source_classes],
         cluster_type=cluster.cluster_type,
+        consecutive_count=cluster.consecutive_count,
+        consecutive_mode=cluster.consecutive_mode,
         tracks=[
             TrackSummary(
                 id=t.id,

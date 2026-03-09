@@ -40,8 +40,12 @@ class SubjectRequirement(Base):
     pinned_slots: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
     blocked_slots: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
     co_teacher_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    # Force lessons to always come in consecutive pairs (double periods)
+    # Force lessons to always come in consecutive pairs (double periods) — LEGACY, use consecutive_count
     always_double: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Consecutive block size: 2 = doubles, 3 = triples, null = no requirement
+    consecutive_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Consecutive mode: "hard" = must, "soft" = preference, null = use always_double fallback
+    consecutive_mode: Mapped[str | None] = mapped_column(String(10), nullable=True)
     # Per-requirement morning priority override (0-100, null = use subject default)
     morning_priority: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Allow teacher to be scheduled elsewhere at the same timeslot (skip no-overlap)

@@ -70,3 +70,21 @@ class ScheduledMeeting(Base):
     period: Mapped[int] = mapped_column(Integer)
 
     solution: Mapped["Solution"] = relationship(back_populates="scheduled_meetings")
+
+
+class AllowedOverlap(Base):
+    """Specific pair-based overlap approval.
+
+    When a user approves an overlap between two items (e.g., a track and a
+    meeting for the same teacher), a record is created here.  The solver's
+    no-overlap constraint checks this table — only the specific pair is
+    exempted, not a blanket 'allow everything' flag.
+    """
+    __tablename__ = "allowed_overlaps"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("schools.id"))
+    item1_type: Mapped[str] = mapped_column(String(20))   # "requirement" | "track" | "meeting"
+    item1_id: Mapped[int] = mapped_column(Integer)
+    item2_type: Mapped[str] = mapped_column(String(20))
+    item2_id: Mapped[int] = mapped_column(Integer)

@@ -87,6 +87,8 @@ def apply_brain_constraints(
     _apply_oz_la_tmura(model, data, variables, gap_indicators, teacher_frontal)
     # HARD: max teaching days based on frontal hours (עוז לתמורה ימי עבודה)
     _apply_max_days_by_frontal(model, data, variables, teacher_frontal)
+    # HARD: max 6 consecutive frontal teaching hours per day
+    _apply_max_consecutive_frontal(model, data, variables)
 
 
 # ── Same-day consecutive (HARD) ───────────────────────────────────────────
@@ -336,9 +338,52 @@ def _update_brain_id(brain_id: int) -> None:
     _NEXT_BRAIN_ID_HOLDER.append(brain_id)
 
 
-# ── Always-double (SOFT, very high weight) ───────────────────────────────
+# ── Consecutive blocks (HARD or SOFT) ────────────────────────────────────
 
-_ALWAYS_DOUBLE_WEIGHT = 95  # Very high — almost-hard preference for double periods
+_CONSECUTIVE_SOFT_WEIGHT = 90  # High weight for soft consecutive preference
+
+
+def _get_consecutive_settings(req, data) -> tuple[int, str] | None:
+    """Get (count, mode) for a requirement.
+
+    Priority: consecutive_count/mode > always_double > subject.always_double
+    Returns None if no consecutive requirement.
+    """
+    count = getattr(req, "consecutive_count", None)
+    mode = getattr(req, "consecutive_mode", None)
+    if count and count >= 2 and mode in ("hard", "soft"):
+        return (count, mode)
+    # Fallback: always_double = count=2, hard
+    req_double = getattr(req, "always_double", False)
+    if req_double:
+        return (2, "hard")
+    subj_double = getattr(req.subject, "always_double", False) if req.subject else False
+    if subj_double:
+        return (2, "hard")
+    return None
+
+
+def _get_cluster_consecutive_settings(cluster, data) -> tuple[int, str] | None:
+    """Get (count, mode) for a cluster.
+
+    Priority: cluster fields > grouped requirement fields > subject always_double.
+    """
+    # Check cluster-level fields first
+    cc = getattr(cluster, "consecutive_count", None)
+    cm = getattr(cluster, "consecutive_mode", None)
+    if cc and cc >= 2 and cm in ("hard", "soft"):
+        return (cc, cm)
+    # Check grouped requirements
+    for req in data.requirements:
+        if req.is_grouped and req.grouping_cluster_id == cluster.id:
+            result = _get_consecutive_settings(req, data)
+            if result:
+                return result
+    # Check subject-level always_double
+    subject_obj = cluster.subject
+    if subject_obj and getattr(subject_obj, "always_double", False):
+        return (2, "hard")
+    return None
 
 
 def _apply_always_double(
@@ -346,23 +391,23 @@ def _apply_always_double(
     data: SolverData,
     variables: SolverVariables,
 ) -> None:
-    """HARD: requirements with always_double=True MUST appear in consecutive pairs.
+    """Enforce consecutive block constraints (count=2 or 3, hard or soft).
 
-    Since same_day_consecutive (HARD) guarantees contiguity, the only violation
-    is having an odd number of lessons on a day (= a singleton).  We decompose
-    each day's lesson count as 2*half + remainder and enforce remainder=0.
+    HARD mode: Since same_day_consecutive guarantees contiguity, we decompose
+    each day's count as count*blocks + remainder and enforce remainder limits.
 
-    For odd total hours (e.g. 5), exactly one singleton day is unavoidable, so
-    we allow at most 1 singleton via: sum(remainders) <= hours % 2.
+    SOFT mode: Penalize remainder (non-block lessons) with high weight.
     """
     brain_id = _next_brain_id() - 1
 
-    def _add_double_constraints(
+    def _add_block_constraints(
         label: str,
         hours: int,
-        var_getter,  # callable(day, period) -> var | None
+        count: int,
+        is_hard: bool,
+        var_getter,
     ) -> bool:
-        """Add HARD constraints for double periods. Returns True if any added."""
+        """Add constraints for consecutive blocks of size `count`."""
         nonlocal brain_id
         remainders: list[cp_model.IntVar] = []
 
@@ -377,24 +422,32 @@ def _apply_always_double(
                 continue
 
             day_sum = sum(day_vars)
-            half = model.new_int_var(0, len(day_vars) // 2, f"alwdbl_half_{label}_{day}")
-            rem = model.new_bool_var(f"alwdbl_rem_{label}_{day}")
-            model.add(day_sum == 2 * half + rem)
+            blocks = model.new_int_var(0, len(day_vars) // count,
+                                       f"consec_blocks_{label}_{day}")
+            rem = model.new_int_var(0, count - 1, f"consec_rem_{label}_{day}")
+            model.add(day_sum == count * blocks + rem)
             remainders.append(rem)
 
         if not remainders:
             return False
 
-        # For odd hours: 1 singleton is unavoidable
-        allowed_singletons = hours % 2  # 0 for even, 1 for odd
+        # How many leftover hours are unavoidable?
+        allowed_remainder = hours % count  # e.g., 5 hours / 2 = 1 leftover
 
-        if allowed_singletons == 0:
-            # Even hours: NO singletons allowed
-            for rem in remainders:
-                model.add(rem == 0)
+        if is_hard:
+            # Total remainder across all days must equal exactly the unavoidable leftover
+            model.add(sum(remainders) <= allowed_remainder)
         else:
-            # Odd hours: at most 1 singleton day
-            model.add(sum(remainders) <= allowed_singletons)
+            # SOFT: penalize remainder beyond unavoidable
+            max_rem = (count - 1) * len(remainders)
+            excess = model.new_int_var(0, max(0, max_rem - allowed_remainder),
+                                       f"consec_excess_{label}")
+            model.add(excess >= sum(remainders) - allowed_remainder)
+            model.add(excess >= 0)
+            if max_rem > allowed_remainder:
+                variables.penalties.append(
+                    (excess, _CONSECUTIVE_SOFT_WEIGHT, brain_id)
+                )
 
         return True
 
@@ -404,10 +457,10 @@ def _apply_always_double(
     for req in data.requirements:
         if req.is_grouped or req.teacher_id is None:
             continue
-        req_double = getattr(req, "always_double", False)
-        subj_double = getattr(req.subject, "always_double", False) if req.subject else False
-        if not req_double and not subj_double:
+        settings = _get_consecutive_settings(req, data)
+        if not settings:
             continue
+        count, mode = settings
         if req.hours_per_week < 2:
             continue
 
@@ -416,8 +469,9 @@ def _apply_always_double(
                 (_req.class_group_id, _req.subject_id, _req.teacher_id, day, p)
             )
 
-        added = _add_double_constraints(
-            f"r{req.id}", req.hours_per_week, _get_req_var,
+        is_hard = mode == "hard"
+        added = _add_block_constraints(
+            f"r{req.id}", req.hours_per_week, count, is_hard, _get_req_var,
         )
         if added:
             subj_name = req.subject.name if req.subject else f"מקצוע {req.subject_id}"
@@ -426,10 +480,11 @@ def _apply_always_double(
                 if cg.id == req.class_group_id:
                     class_name = cg.name
                     break
+            mode_label = "חובה" if is_hard else "העדפה"
             variables.brain_info[brain_id] = {
-                "name": f"שעות כפולות (חובה) — {subj_name} ל{class_name or req.class_group_id}",
-                "weight": 0,
-                "is_hard": True,
+                "name": f"{count} רצופות ({mode_label}) — {subj_name} ל{class_name or req.class_group_id}",
+                "weight": 0 if is_hard else _CONSECUTIVE_SOFT_WEIGHT,
+                "is_hard": is_hard,
             }
             brain_id -= 1
             has_any = True
@@ -439,20 +494,11 @@ def _apply_always_double(
         if not cluster.tracks:
             continue
 
-        subject_obj = cluster.subject
-        has_always_double = getattr(subject_obj, "always_double", False) if subject_obj else False
-        if not has_always_double:
-            has_always_double = any(
-                getattr(req, "always_double", False)
-                or (getattr(req.subject, "always_double", False) if req.subject else False)
-                for req in data.requirements
-                if req.is_grouped and req.grouping_cluster_id == cluster.id
-            )
-        if not has_always_double:
+        settings = _get_cluster_consecutive_settings(cluster, data)
+        if not settings:
             continue
+        count, mode = settings
 
-        # For synced clusters: apply to representative track only
-        # (all tracks share the same timeslots via SYNC)
         tracks_with_teacher = [t for t in cluster.tracks
                                if t.teacher_id is not None and not t.is_secondary]
         if not tracks_with_teacher:
@@ -465,17 +511,18 @@ def _apply_always_double(
         def _get_track_var(day, p, _tid=rep_track.id):
             return variables.x_track.get((_tid, day, p))
 
-        added = _add_double_constraints(
+        is_hard = mode == "hard"
+        added = _add_block_constraints(
             f"cl{cluster.id}_tr{rep_track.id}",
-            rep_track.hours_per_week,
-            _get_track_var,
+            rep_track.hours_per_week, count, is_hard, _get_track_var,
         )
         if added:
-            subj_name = subject_obj.name if subject_obj else cluster.name
+            subj_name = cluster.subject.name if cluster.subject else cluster.name
+            mode_label = "חובה" if is_hard else "העדפה"
             variables.brain_info[brain_id] = {
-                "name": f"שעות כפולות (חובה) — {subj_name} ({cluster.name})",
-                "weight": 0,
-                "is_hard": True,
+                "name": f"{count} רצופות ({mode_label}) — {subj_name} ({cluster.name})",
+                "weight": 0 if is_hard else _CONSECUTIVE_SOFT_WEIGHT,
+                "is_hard": is_hard,
             }
             brain_id -= 1
             has_any = True
@@ -945,8 +992,8 @@ def _apply_oz_la_tmura(
 
 # Frontal hours → max teaching days (עוז לתמורה ימי עבודה)
 _FRONTAL_TO_MAX_DAYS: list[tuple[int, int, int]] = [
-    (1, 12, 3),   # 1-12 hours → max 3 days
-    (13, 18, 4),  # 13-18 hours → max 4 days
+    (1, 16, 3),   # 1-16 hours → max 3 days
+    (17, 18, 4),  # 17-18 hours → max 4 days
     (19, 999, 5), # 19+ hours → max 5 days
 ]
 
@@ -967,8 +1014,8 @@ def _apply_max_days_by_frontal(
 ) -> None:
     """HARD: limit teaching days based on frontal hours.
 
-    1-12 frontal hours → max 3 days
-    13-18 frontal hours → max 4 days
+    1-16 frontal hours → max 3 days
+    17-18 frontal hours → max 4 days
     19-24+ frontal hours → max 5 days
 
     Only counts days with actual teaching (lessons/tracks), NOT meetings.
@@ -1045,5 +1092,84 @@ def _apply_max_days_by_frontal(
             "weight": 0,
             "is_hard": True,
             "breakdown": breakdown,
+        }
+        _update_brain_id(brain_id)
+
+
+# ── Max consecutive frontal hours per day (HARD) ────────────────────────
+
+_MAX_CONSECUTIVE_FRONTAL = 6  # No more than 6 consecutive frontal teaching hours
+
+
+def _apply_max_consecutive_frontal(
+    model: cp_model.CpModel,
+    data: SolverData,
+    variables: SolverVariables,
+) -> None:
+    """HARD: a teacher cannot have more than 6 consecutive frontal hours in a day.
+
+    Only frontal teaching (lessons + tracks) counts. Meetings, individual
+    sessions (פרטני), and gaps all break the consecutive streak.
+
+    Implementation: for every window of 7 consecutive periods on a given day,
+    at most 6 can be frontal teaching for the same teacher.
+    """
+    brain_id = _next_brain_id() - 1
+    window = _MAX_CONSECUTIVE_FRONTAL + 1  # 7 — if all 7 are frontal, that's a violation
+
+    # Build teacher -> day -> {period: [frontal vars]} (lessons + tracks only)
+    teacher_day_period: dict[int, dict[str, dict[int, list[cp_model.IntVar]]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(list))
+    )
+
+    for key, var in variables.x.items():
+        _c, _s, t_id, day, period = key
+        teacher_day_period[t_id][day][period].append(var)
+
+    for cluster in data.clusters:
+        for track in cluster.tracks:
+            if track.teacher_id is not None:
+                for key, var in variables.x_track.items():
+                    tk_id, day, period = key
+                    if tk_id == track.id:
+                        teacher_day_period[track.teacher_id][day][period].append(var)
+
+    has_any = False
+
+    for t_id, days_map in teacher_day_period.items():
+        for day, period_vars_map in days_map.items():
+            sorted_periods = sorted(period_vars_map.keys())
+            if len(sorted_periods) < window:
+                continue
+
+            # For each window of `window` consecutive periods
+            for i in range(len(sorted_periods) - window + 1):
+                win_periods = sorted_periods[i : i + window]
+                # Only apply if periods are truly consecutive (no structural gaps)
+                if win_periods[-1] - win_periods[0] != window - 1:
+                    continue
+
+                win_vars: list[cp_model.IntVar] = []
+                for p in win_periods:
+                    pvars = period_vars_map[p]
+                    if len(pvars) == 1:
+                        win_vars.append(pvars[0])
+                    else:
+                        # Teacher may have multiple lessons at same period (shouldn't happen
+                        # due to no-overlap, but use max for safety)
+                        active = model.new_bool_var(
+                            f"brain_consfront_act_t{t_id}_{day}_p{p}"
+                        )
+                        model.add_max_equality(active, pvars)
+                        win_vars.append(active)
+
+                model.add(sum(win_vars) <= _MAX_CONSECUTIVE_FRONTAL)
+                has_any = True
+
+    if has_any:
+        variables.brain_info[brain_id] = {
+            "name": "מקסימום 6 שעות פרונטליות רצופות ליום",
+            "weight": 0,
+            "is_hard": True,
         }
         _update_brain_id(brain_id)

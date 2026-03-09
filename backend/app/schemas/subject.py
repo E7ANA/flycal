@@ -51,6 +51,8 @@ class SubjectRequirementCreate(BaseModel):
     blocked_slots: list[PinnedSlot] | None = None
     co_teacher_ids: list[int] | None = None
     always_double: bool = False
+    consecutive_count: int | None = None
+    consecutive_mode: str | None = None
     morning_priority: int | None = None
     allow_overlap: bool = False
 
@@ -65,6 +67,8 @@ class SubjectRequirementUpdate(BaseModel):
     blocked_slots: list[PinnedSlot] | None = None
     co_teacher_ids: list[int] | None = None
     always_double: bool | None = None
+    consecutive_count: int | None = None
+    consecutive_mode: str | None = None
     morning_priority: int | None = None
     allow_overlap: bool | None = None
 
@@ -83,6 +87,8 @@ class SubjectRequirementRead(BaseModel):
     blocked_slots: list[PinnedSlot] | None
     co_teacher_ids: list[int] | None
     always_double: bool
+    consecutive_count: int | None
+    consecutive_mode: str | None
     morning_priority: int | None
     allow_overlap: bool
 

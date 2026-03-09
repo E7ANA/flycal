@@ -11,6 +11,7 @@ import {
   fetchLessonsByTeacher,
   fetchScheduledMeetings,
   fetchTeacherPresence,
+  fetchMeetingAbsences,
 } from "@/api/solver";
 import { fetchMeetings } from "@/api/meetings";
 import { fetchClasses } from "@/api/classes";
@@ -104,6 +105,12 @@ export default function ResultsPage() {
     enabled: !!schoolId,
   });
 
+  const { data: meetingAbsences = [] } = useQuery({
+    queryKey: ["meeting-absences", schoolId],
+    queryFn: () => fetchMeetingAbsences(schoolId!),
+    enabled: !!schoolId,
+  });
+
   const { data: clusters = [] } = useQuery({
     queryKey: ["grouping-clusters", schoolId],
     queryFn: () => fetchGroupingClusters(schoolId!),
@@ -153,11 +160,17 @@ export default function ResultsPage() {
   );
 
   // Filter meetings for current view target
+  // Exclude teachers who are absent from meetings (approved absences)
   const filteredMeetings =
     viewMode === "teacher" && viewTargetId
       ? allScheduledMeetings.filter((sm) => {
           const meeting = meetings.find((m) => m.id === sm.meeting_id);
-          return meeting?.teacher_ids.includes(viewTargetId);
+          if (!meeting?.teacher_ids.includes(viewTargetId)) return false;
+          // Exclude if teacher is absent from this meeting
+          const isAbsent = meetingAbsences.some(
+            (a) => a.meeting_id === sm.meeting_id && a.teacher_id === viewTargetId,
+          );
+          return !isAbsent;
         })
       : viewMode === "class"
         ? [] // Meetings are teacher-level, not shown in class view
@@ -452,6 +465,7 @@ export default function ResultsPage() {
                       showClass={viewMode === "teacher"}
                       meetings={filteredMeetings}
                       meetingMap={meetingMap}
+                      meetingAbsences={meetingAbsences}
                       presenceSlots={
                         viewMode === "teacher" && teacherPresence
                           ? teacherPresence.slots

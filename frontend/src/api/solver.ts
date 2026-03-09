@@ -15,11 +15,20 @@ interface SolveRequest {
   num_workers?: number;
 }
 
+export interface DiagnosisItem {
+  source: string; // "user_constraint" | "brain_rule" | "system" | "combination"
+  name: string;
+  constraint_id: number | null;
+  rule_type: string | null;
+  details: string;
+}
+
 interface SolveResponse {
   status: string;
   message: string;
   solve_time: number;
   solutions: Solution[];
+  diagnosis?: DiagnosisItem[] | null;
 }
 
 export async function runSolver(req: SolveRequest): Promise<SolveResponse> {
@@ -126,7 +135,7 @@ export async function validateBeforeSolve(
 // ── Overlap detection & resolution ──────────────────────────────────────
 
 export interface OverlapItem {
-  type: "requirement" | "track" | "meeting";
+  type: "requirement" | "track" | "meeting" | "teacher_absence";
   id: number;
   label: string;
   teacher_id: number;
@@ -140,20 +149,27 @@ export interface OverlapConflict {
   message: string;
 }
 
+export interface OverlapDetectionResult {
+  conflicts: OverlapConflict[];
+  approved: OverlapConflict[];
+}
+
 export async function detectOverlaps(
   schoolId: number,
-): Promise<OverlapConflict[]> {
-  const { data } = await api.post<OverlapConflict[]>("/detect-overlaps", {
+): Promise<OverlapDetectionResult> {
+  const { data } = await api.post<OverlapDetectionResult>("/detect-overlaps", {
     school_id: schoolId,
   });
   return data;
 }
 
 export async function toggleOverlaps(
+  schoolId: number,
   items: { type: string; id: number }[],
   allow: boolean,
 ): Promise<{ updated: number }> {
   const { data } = await api.post<{ updated: number }>("/toggle-overlaps", {
+    school_id: schoolId,
     items,
     allow,
   });
@@ -165,6 +181,24 @@ export async function clearAllOverlaps(
 ): Promise<{ cleared: number }> {
   const { data } = await api.post<{ cleared: number }>("/clear-all-overlaps", {
     school_id: schoolId,
+  });
+  return data;
+}
+
+// ── Meeting absences ─────────────────────────────────────────────────────
+
+export interface MeetingAbsence {
+  meeting_id: number;
+  meeting_name: string;
+  teacher_id: number;
+  teacher_name: string;
+}
+
+export async function fetchMeetingAbsences(
+  schoolId: number,
+): Promise<MeetingAbsence[]> {
+  const { data } = await api.get<MeetingAbsence[]>("/meeting-absences", {
+    params: { school_id: schoolId },
   });
   return data;
 }

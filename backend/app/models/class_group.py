@@ -56,6 +56,9 @@ class GroupingCluster(Base):
     subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id"))
     grade_id: Mapped[int | None] = mapped_column(ForeignKey("grades.id"), nullable=True)
     cluster_type: Mapped[str] = mapped_column(String(20), default=ClusterType.REGULAR.value)
+    # Consecutive block settings for all tracks in this cluster
+    consecutive_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    consecutive_mode: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     subject: Mapped["Subject"] = relationship()
     grade: Mapped["Grade | None"] = relationship()

@@ -74,11 +74,22 @@ def _clear_progress(job_id: str) -> None:
 
 
 @dataclass
+class InfeasibilityConflict:
+    """A single constraint/rule that contributes to infeasibility."""
+    source: str            # "user_constraint" | "brain_rule" | "system"
+    name: str              # Human-readable name
+    constraint_id: int | None = None
+    rule_type: str | None = None
+    details: str = ""
+
+
+@dataclass
 class SolveResult:
     status: SolutionStatus
     solutions: list[Solution]
     solve_time: float
     message: str
+    diagnosis: list[InfeasibilityConflict] | None = None
 
 
 @dataclass
@@ -324,23 +335,14 @@ def _check_pinned_conflicts(
     2. Pinned slots on teacher-blocked timeslots
     3. Synced cluster tracks that inherit pinned slots and create teacher overlaps
 
-    Skips conflicts where all involved items have allow_overlap=True.
+    Skips conflicts where all involved PAIRS are in allowed_overlap_pairs.
     """
+    from app.solver.model_builder import _normalize_pair
+
     errors: list[str] = []
 
-    # Collect overlap-allowed items
-    overlap_allowed_reqs: set[int] = set()
-    for req in data.requirements:
-        if getattr(req, "allow_overlap", False):
-            overlap_allowed_reqs.add(req.id)
-    overlap_allowed_tracks: set[int] = set()
-    for cluster in data.clusters:
-        for track in cluster.tracks:
-            if getattr(track, "allow_overlap", False):
-                overlap_allowed_tracks.add(track.id)
-
-    # Build map: teacher_id -> [(day, period, source_description, is_overlap_allowed)]
-    teacher_pinned: dict[int, list[tuple[str, int, str, bool]]] = {}
+    # Build map: teacher_id -> [(day, period, item_type, item_id, source_description)]
+    teacher_pinned: dict[int, list[tuple[str, int, str, int, str]]] = {}
 
     # Collect pinned regular lessons
     for req in data.requirements:
@@ -357,14 +359,13 @@ def _check_pinned_conflicts(
                 break
         class_label = class_name or f"כיתה {req.class_group_id}"
         source = f"{subj_name} ל{class_label}"
-        is_allowed = req.id in overlap_allowed_reqs
 
         for slot in pinned:
             day = slot.get("day")
             period = slot.get("period")
             if day and period:
                 teacher_pinned.setdefault(req.teacher_id, []).append(
-                    (day, period, source, is_allowed)
+                    (day, period, "requirement", req.id, source)
                 )
 
     # Collect pinned tracks — including inherited pins via grouping sync
@@ -395,10 +396,9 @@ def _check_pinned_conflicts(
             if getattr(track, "is_secondary", False):
                 continue
             source = f"רצועה '{track.name}' באשכול '{cluster.name}' (סנכרון)"
-            is_allowed = track.id in overlap_allowed_tracks
             for day, period in inherited_slots:
                 teacher_pinned.setdefault(track.teacher_id, []).append(
-                    (day, period, source, is_allowed)
+                    (day, period, "track", track.id, source)
                 )
 
     # Collect pinned meetings
@@ -406,22 +406,22 @@ def _check_pinned_conflicts(
         pinned = getattr(meeting, "pinned_slots", None)
         if not pinned:
             continue
-        is_allowed = getattr(meeting, "allow_overlap", False)
         for slot in pinned:
             day = slot.get("day")
             period = slot.get("period")
             if day and period:
                 for t in meeting.teachers:
                     teacher_pinned.setdefault(t.id, []).append(
-                        (day, period, f"ישיבה '{meeting.name}'", is_allowed)
+                        (day, period, "meeting", meeting.id, f"ישיבה '{meeting.name}'")
                     )
 
     # Check for overlaps: same teacher pinned at same (day, period) from different sources
+    # Skip pairs that are in allowed_overlap_pairs
     for tid, entries in teacher_pinned.items():
         tname = teacher_name_map.get(tid, f"מורה #{tid}")
-        by_slot: dict[tuple[str, int], list[tuple[str, bool]]] = {}
-        for day, period, source, is_allowed in entries:
-            by_slot.setdefault((day, period), []).append((source, is_allowed))
+        by_slot: dict[tuple[str, int], list[tuple[str, int, str]]] = {}
+        for day, period, item_type, item_id, source in entries:
+            by_slot.setdefault((day, period), []).append((item_type, item_id, source))
 
         for (day, period), slot_entries in by_slot.items():
             # Check if slot is blocked
@@ -429,14 +429,26 @@ def _check_pinned_conflicts(
             if (day, period) in blocked:
                 errors.append(
                     f"מורה {tname}: הצמדה ל{_day_he(day)} שעה {period} "
-                    f"({slot_entries[0][0]}) אבל המורה חסומה בזמן הזה"
+                    f"({slot_entries[0][2]}) אבל המורה חסומה בזמן הזה"
                 )
 
-            # Check overlaps — skip if ALL items in the collision are overlap-allowed
+            # Check overlaps — skip pairs that are specifically allowed
             if len(slot_entries) > 1:
-                all_allowed = all(allowed for _, allowed in slot_entries)
-                if not all_allowed:
-                    sources_str = " + ".join(src for src, _ in slot_entries)
+                has_disallowed_pair = False
+                for i in range(len(slot_entries)):
+                    for j in range(i + 1, len(slot_entries)):
+                        pair = _normalize_pair(
+                            slot_entries[i][0], slot_entries[i][1],
+                            slot_entries[j][0], slot_entries[j][1],
+                        )
+                        if pair not in data.allowed_overlap_pairs:
+                            has_disallowed_pair = True
+                            break
+                    if has_disallowed_pair:
+                        break
+
+                if has_disallowed_pair:
+                    sources_str = " + ".join(src for _, _, src in slot_entries)
                     errors.append(
                         f"מורה {tname}: התנגשות הצמדות ב{_day_he(day)} שעה {period} — "
                         f"{sources_str}"
@@ -457,6 +469,185 @@ _DAY_HEBREW = {
 
 def _day_he(day: str) -> str:
     return _DAY_HEBREW.get(day, day)
+
+
+def _diagnose_infeasibility(
+    data: SolverData,
+    db: Session,
+    school_id: int,
+    job_id: str | None = None,
+) -> list[InfeasibilityConflict]:
+    """Diagnose why the model is infeasible.
+
+    Strategy:
+    1. Verify system constraints alone are feasible.
+    2. Add user constraints by rule-type group — find which groups break it.
+    3. Drill into problematic groups to find specific constraints.
+    4. Test brain rules on top.
+    Returns a list of conflicting constraints/rules.
+    """
+    import logging
+    from collections import defaultdict
+    from app.models.constraint import Constraint
+    from app.solver.constraint_compiler import _compile_one, compile_all_constraints
+    from app.solver import brain as brain_module
+
+    log = logging.getLogger("solver.diagnosis")
+
+    _QUICK_TIME = 5  # seconds per test
+    _QUICK_WORKERS = 4
+
+    def _quick_solve(model: cp_model.CpModel) -> int:
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = _QUICK_TIME
+        solver.parameters.num_workers = _QUICK_WORKERS
+        return solver.solve(model)
+
+    def _build_base():
+        """Build system-only model (known feasible baseline)."""
+        m = cp_model.CpModel()
+        v = create_variables(m, data)
+        add_system_constraints(m, data, v)
+        return m, v
+
+    conflicts: list[InfeasibilityConflict] = []
+
+    if job_id:
+        _set_progress(job_id, step="diagnosing", step_number=8,
+                      elapsed=0, result_message="מאבחן את סיבת הכשל...")
+
+    # ── Phase 0: System constraints alone ──────────────────────────────
+    log.info("Diagnosis: testing system constraints alone")
+    m0, _ = _build_base()
+    if _quick_solve(m0) == cp_model.INFEASIBLE:
+        conflicts.append(InfeasibilityConflict(
+            source="system",
+            name="אילוצי מערכת בסיסיים",
+            details="אילוצי המערכת הבסיסיים (חפיפת מורים, כיתות, שעות) סותרים — "
+                    "ייתכן שהנתונים מכילים שגיאה מבנית",
+        ))
+        return conflicts
+
+    # ── Phase 1: User constraints — test by rule-type group ────────────
+    active_constraints = (
+        db.query(Constraint)
+        .filter(Constraint.school_id == school_id, Constraint.is_active == True)
+        .all()
+    )
+
+    by_rule: dict[str, list] = defaultdict(list)
+    for c in active_constraints:
+        by_rule[str(c.rule_type)].append(c)
+
+    problematic_groups: list[str] = []
+    for rule_type, group in by_rule.items():
+        m, v = _build_base()
+        for c in group:
+            _compile_one(m, data, v, c)
+        status = _quick_solve(m)
+        if status == cp_model.INFEASIBLE:
+            problematic_groups.append(rule_type)
+            log.info(f"Diagnosis: rule_type {rule_type} ({len(group)} constraints) -> INFEASIBLE")
+
+    # ── Phase 2: Drill into problematic groups ─────────────────────────
+    for rule_type in problematic_groups:
+        group = by_rule[rule_type]
+        if len(group) == 1:
+            c = group[0]
+            conflicts.append(InfeasibilityConflict(
+                source="user_constraint",
+                name=c.name,
+                constraint_id=c.id,
+                rule_type=rule_type,
+                details=f"האילוץ '{c.name}' סותר את אילוצי המערכת הבסיסיים. "
+                        f"נסו לשנות אותו ל-SOFT או לבטלו זמנית.",
+            ))
+        else:
+            # Test each constraint in the group individually
+            for c in group:
+                m, v = _build_base()
+                _compile_one(m, data, v, c)
+                status = _quick_solve(m)
+                if status == cp_model.INFEASIBLE:
+                    conflicts.append(InfeasibilityConflict(
+                        source="user_constraint",
+                        name=c.name,
+                        constraint_id=c.id,
+                        rule_type=rule_type,
+                        details=f"האילוץ '{c.name}' סותר את אילוצי המערכת לבד. "
+                                f"נסו לשנות אותו ל-SOFT או לבטלו זמנית.",
+                    ))
+
+            # If no individual constraint caused INFEASIBLE, it's a combination
+            if not any(c.rule_type == rule_type for c in conflicts
+                       if hasattr(c, 'rule_type')):
+                names = ", ".join(c.name for c in group[:5])
+                if len(group) > 5:
+                    names += f" (+{len(group) - 5} נוספים)"
+                conflicts.append(InfeasibilityConflict(
+                    source="user_constraint",
+                    name=f"שילוב אילוצים מסוג {rule_type}",
+                    rule_type=rule_type,
+                    details=f"השילוב של {len(group)} אילוצים מסוג זה יחד סותר "
+                            f"את אילוצי המערכת: {names}",
+                ))
+
+    # ── Phase 3: Test brain rules ──────────────────────────────────────
+    # Build model with system + all user constraints (to test brain on top)
+    # But only if user constraints alone are feasible
+    if not conflicts:
+        m_base, v_base = _build_base()
+        compile_all_constraints(m_base, data, v_base, db, school_id)
+        base_status = _quick_solve(m_base)
+
+        if base_status != cp_model.INFEASIBLE:
+            # User constraints alone are OK, test brain functions
+            brain_functions = [
+                ("same_day_consecutive", "שעות רצופות באותו יום", brain_module._apply_same_day_consecutive),
+                ("always_double", "שעות כפולות (חובה)", brain_module._apply_always_double),
+                ("max_days_by_frontal", "ימי עבודה לפי שעות פרונטליות", None),
+                ("oz_la_tmura", "כללי עוז לתמורה (חלונות)", None),
+                ("max_consecutive_frontal", "מקסימום שעות פרונטליות רצופות", brain_module._apply_max_consecutive_frontal),
+            ]
+
+            for func_name, display_name, func in brain_functions:
+                m, v = _build_base()
+                compile_all_constraints(m, data, v, db, school_id)
+                brain_module._NEXT_BRAIN_ID_HOLDER.clear()
+                brain_module._NEXT_BRAIN_ID_HOLDER.append(-1)
+
+                if func is not None:
+                    func(m, data, v)
+                else:
+                    # Functions that need shared data
+                    teacher_frontal = brain_module._compute_teacher_frontal(data)
+                    gap_indicators = brain_module._build_teacher_gap_indicators(m, data, v)
+                    if func_name == "oz_la_tmura":
+                        brain_module._apply_oz_la_tmura(m, data, v, gap_indicators, teacher_frontal)
+                    elif func_name == "max_days_by_frontal":
+                        brain_module._apply_max_days_by_frontal(m, data, v, teacher_frontal)
+
+                status = _quick_solve(m)
+                if status == cp_model.INFEASIBLE:
+                    conflicts.append(InfeasibilityConflict(
+                        source="brain_rule",
+                        name=display_name,
+                        details=f"כלל המוח '{display_name}' בשילוב עם שאר האילוצים "
+                                f"הופך את הבעיה לבלתי פתירה.",
+                    ))
+
+    # ── Phase 4: If still nothing found, test full combination ─────────
+    if not conflicts:
+        conflicts.append(InfeasibilityConflict(
+            source="combination",
+            name="שילוב אילוצים",
+            details="לא נמצא אילוץ בודד שגורם לבעיה — השילוב של כל האילוצים "
+                    "יחד הופך את הבעיה לבלתי פתירה. נסו להגדיל את זמן הפתרון, "
+                    "או לבטל זמנית חלק מהאילוצים.",
+        ))
+
+    log.info(f"Diagnosis complete: {len(conflicts)} conflicts found")
+    return conflicts
 
 
 def solve(
@@ -537,14 +728,26 @@ def solve(
     elif status == cp_model.FEASIBLE:
         sol_status = SolutionStatus.FEASIBLE
     elif status == cp_model.INFEASIBLE:
+        # Run infeasibility diagnosis
+        _step(8, "diagnosing")
+        if job_id:
+            _set_progress(job_id, step="diagnosing", step_number=8,
+                          result_message="מאבחן את סיבת הכשל...")
+        diagnosis = _diagnose_infeasibility(data, db, school_id, job_id)
+        diag_msg = ""
+        if diagnosis:
+            diag_names = [d.name for d in diagnosis]
+            diag_msg = " | גורמים: " + ", ".join(diag_names)
+        msg = "לא נמצא פתרון — ייתכן שהאילוצים סותרים זה את זה" + diag_msg
         if job_id:
             _set_progress(job_id, done=True, result_status="INFEASIBLE",
-                          result_message="לא נמצא פתרון")
+                          result_message=msg)
         return SolveResult(
             status=SolutionStatus.INFEASIBLE,
             solutions=[],
-            solve_time=solve_time,
-            message="לא נמצא פתרון — ייתכן שהאילוצים סותרים זה את זה",
+            solve_time=time.time() - start_time,
+            message=msg,
+            diagnosis=diagnosis,
         )
     else:
         if job_id:

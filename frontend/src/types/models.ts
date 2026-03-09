@@ -81,6 +81,8 @@ export interface SubjectRequirement {
   blocked_slots: PinnedSlot[] | null;
   co_teacher_ids: number[] | null;
   always_double: boolean;
+  consecutive_count: number | null;
+  consecutive_mode: string | null; // "hard" | "soft" | null
   morning_priority: number | null;
   allow_overlap: boolean;
 }
@@ -112,6 +114,8 @@ export interface GroupingCluster {
   source_class_ids: number[];
   tracks: Track[];
   cluster_type: ClusterType;
+  consecutive_count: number | null;
+  consecutive_mode: string | null;
 }
 
 // ─── TimeSlot ────────────────────────────────────────────

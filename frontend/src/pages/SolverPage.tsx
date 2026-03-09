@@ -19,6 +19,8 @@ import {
   toggleOverlaps,
   clearAllOverlaps,
   type OverlapConflict,
+  type OverlapDetectionResult,
+  type DiagnosisItem,
 } from "@/api/solver";
 import { Button } from "@/components/common/Button";
 import {
@@ -45,11 +47,13 @@ export default function SolverPage() {
     message: string;
     solve_time: number;
     solutions: Solution[];
+    diagnosis?: DiagnosisItem[] | null;
   } | null>(null);
   const [elapsedTimer, setElapsedTimer] = useState(0);
 
   // Overlap conflict state
   const [overlaps, setOverlaps] = useState<OverlapConflict[]>([]);
+  const [approvedOverlaps, setApprovedOverlaps] = useState<OverlapConflict[]>([]);
   const [allowedOverlaps, setAllowedOverlaps] = useState<
     Set<string>
   >(new Set()); // "type:id" keys
@@ -96,10 +100,11 @@ export default function SolverPage() {
         // Auto-detect overlaps
         try {
           const detected = await detectOverlaps(schoolId!);
-          setOverlaps(detected);
-          if (detected.length > 0) {
+          setOverlaps(detected.conflicts);
+          setApprovedOverlaps(detected.approved);
+          if (detected.conflicts.length > 0) {
             toast.error(
-              `לא ניתן לפתור — נמצאו ${detected.length} חפיפות מורים`,
+              `לא ניתן לפתור — נמצאו ${detected.conflicts.length} חפיפות מורים`,
             );
           } else {
             toast.error(result.message);
@@ -119,17 +124,34 @@ export default function SolverPage() {
   const handleAllowOverlap = async (conflict: OverlapConflict) => {
     try {
       await toggleOverlaps(
+        schoolId!,
         conflict.items.map((item) => ({ type: item.type, id: item.id })),
         true,
       );
-      const newAllowed = new Set(allowedOverlaps);
-      for (const item of conflict.items) {
-        newAllowed.add(`${item.type}:${item.id}`);
-      }
-      setAllowedOverlaps(newAllowed);
+      // Re-detect to refresh both lists
+      const detected = await detectOverlaps(schoolId!);
+      setOverlaps(detected.conflicts);
+      setApprovedOverlaps(detected.approved);
       toast.success(`חפיפה אושרה עבור ${conflict.teacher_name}`);
     } catch {
       toast.error("שגיאה באישור חפיפה");
+    }
+  };
+
+  const handleRevokeOverlap = async (conflict: OverlapConflict) => {
+    try {
+      await toggleOverlaps(
+        schoolId!,
+        conflict.items.map((item) => ({ type: item.type, id: item.id })),
+        false,
+      );
+      // Re-detect to refresh both lists
+      const detected = await detectOverlaps(schoolId!);
+      setOverlaps(detected.conflicts);
+      setApprovedOverlaps(detected.approved);
+      toast.success(`בוטל אישור חפיפה עבור ${conflict.teacher_name}`);
+    } catch {
+      toast.error("שגיאה בביטול חפיפה");
     }
   };
 
@@ -138,6 +160,7 @@ export default function SolverPage() {
       const res = await clearAllOverlaps(schoolId!);
       setAllowedOverlaps(new Set());
       setOverlaps([]);
+      setApprovedOverlaps([]);
       toast.success(`נוקו ${res.cleared} אישורי חפיפה`);
     } catch {
       toast.error("שגיאה בניקוי חפיפות");
@@ -185,9 +208,12 @@ export default function SolverPage() {
               onClick={async () => {
                 try {
                   const detected = await detectOverlaps(schoolId!);
-                  setOverlaps(detected);
-                  if (detected.length > 0) {
-                    toast.error(`נמצאו ${detected.length} חפיפות מורים`);
+                  setOverlaps(detected.conflicts);
+                  setApprovedOverlaps(detected.approved);
+                  if (detected.conflicts.length > 0) {
+                    toast.error(`נמצאו ${detected.conflicts.length} חפיפות מורים`);
+                  } else if (detected.approved.length > 0) {
+                    toast.success(`אין חפיפות חדשות (${detected.approved.length} מאושרות)`);
                   } else {
                     toast.success("אין חפיפות מורים");
                   }
@@ -311,7 +337,7 @@ export default function SolverPage() {
                           key={`${item.type}-${item.id}`}
                           className="text-xs px-2 py-1 rounded bg-white/60"
                         >
-                          {item.type === "track" ? "רמה" : item.type === "meeting" ? "ישיבה" : "דרישה"}:{" "}
+                          {item.type === "track" ? "רמה" : item.type === "meeting" ? "ישיבה" : item.type === "teacher_absence" ? "היעדרות" : "דרישה"}:{" "}
                           {item.label}
                         </div>
                       ))}
@@ -319,6 +345,68 @@ export default function SolverPage() {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Approved overlaps */}
+          {!solveResult && approvedOverlaps.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-green-800 bg-green-50 p-3 rounded-md border border-green-200">
+                <CheckCircle2 className="h-5 w-5 shrink-0" />
+                <div className="flex-1">
+                  <p className="font-medium">
+                    {approvedOverlaps.length} חפיפות מאושרות
+                  </p>
+                  <p className="text-xs mt-0.5">
+                    חפיפות אלו אושרו ולא ייחשבו כהתנגשות.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-green-400 text-green-700 hover:bg-green-100"
+                  onClick={handleClearOverlaps}
+                >
+                  <Undo2 className="h-3 w-3" />
+                  נקה הכל
+                </Button>
+              </div>
+
+              {approvedOverlaps.map((conflict) => (
+                <div
+                  key={`approved-${conflict.teacher_id}`}
+                  className="rounded-md border border-green-200 bg-green-50/50 p-3 space-y-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-sm">
+                      {conflict.teacher_name}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-red-300 text-red-600 hover:bg-red-50"
+                      onClick={() => handleRevokeOverlap(conflict)}
+                    >
+                      <Undo2 className="h-3 w-3" />
+                      בטל אישור
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {conflict.message}
+                  </p>
+                  <div className="space-y-1">
+                    {conflict.items.map((item) => (
+                      <div
+                        key={`${item.type}-${item.id}`}
+                        className="text-xs px-2 py-1 rounded bg-white/60"
+                      >
+                        {item.type === "track" ? "רמה" : item.type === "meeting" ? "ישיבה" : item.type === "teacher_absence" ? "היעדרות" : "דרישה"}:{" "}
+                        {item.label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </CardContent>
@@ -373,11 +461,11 @@ export default function SolverPage() {
           </div>
 
           {/* Active overlaps indicator */}
-          {allowedOverlaps.size > 0 && (
-            <div className="flex items-center gap-3 p-3 rounded-md bg-amber-50 border border-amber-200">
-              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
-              <span className="text-sm text-amber-800 flex-1">
-                {allowedOverlaps.size} פריטים עם חפיפת מורה מאושרת (זמני)
+          {approvedOverlaps.length > 0 && (
+            <div className="flex items-center gap-3 p-3 rounded-md bg-green-50 border border-green-200">
+              <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
+              <span className="text-sm text-green-800 flex-1">
+                {approvedOverlaps.length} חפיפות מורים מאושרות
               </span>
               <Button
                 size="sm"
@@ -458,6 +546,67 @@ export default function SolverPage() {
 
               <p className="text-sm">{solveResult.message}</p>
 
+              {/* Infeasibility diagnosis */}
+              {solveResult.status === "INFEASIBLE" &&
+                solveResult.diagnosis &&
+                solveResult.diagnosis.length > 0 && (
+                  <div className="space-y-2 mt-3">
+                    <div className="flex items-center gap-2 text-red-800 bg-red-50 p-3 rounded-md border border-red-200">
+                      <XCircle className="h-5 w-5 shrink-0" />
+                      <div>
+                        <p className="font-medium">
+                          אבחון: נמצאו {solveResult.diagnosis.length} גורמים לכשל
+                        </p>
+                        <p className="text-xs mt-0.5">
+                          הסולבר זיהה את האילוצים הבאים כגורמים לבעיה:
+                        </p>
+                      </div>
+                    </div>
+                    {solveResult.diagnosis.map((item, idx) => (
+                      <div
+                        key={idx}
+                        className="rounded-md border border-red-200 bg-white p-3 space-y-1"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Badge
+                            variant={
+                              item.source === "user_constraint"
+                                ? "destructive"
+                                : item.source === "brain_rule"
+                                  ? "warning"
+                                  : "secondary"
+                            }
+                          >
+                            {item.source === "user_constraint"
+                              ? "אילוץ משתמש"
+                              : item.source === "brain_rule"
+                                ? "כלל מוח"
+                                : item.source === "system"
+                                  ? "מערכת"
+                                  : "שילוב"}
+                          </Badge>
+                          <span className="font-medium text-sm">
+                            {item.name}
+                          </span>
+                          {item.constraint_id && (
+                            <span className="text-xs text-muted-foreground">
+                              (#{item.constraint_id})
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {item.details}
+                        </p>
+                        {item.rule_type && (
+                          <p className="text-xs text-muted-foreground/70">
+                            סוג כלל: {item.rule_type}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
               {/* Overlap conflicts when INFEASIBLE */}
               {solveResult.status === "INFEASIBLE" &&
                 overlaps.length > 0 && (
@@ -475,70 +624,92 @@ export default function SolverPage() {
                       </div>
                     </div>
 
-                    {overlaps.map((conflict) => {
-                      const isAllowed = conflict.items.every((item) =>
-                        allowedOverlaps.has(`${item.type}:${item.id}`),
-                      );
-                      return (
-                        <div
-                          key={conflict.teacher_id}
-                          className={`rounded-md border p-3 space-y-2 ${
-                            isAllowed
-                              ? "bg-green-50 border-green-200"
-                              : "bg-red-50 border-red-200"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="font-medium text-sm">
-                              {conflict.teacher_name}
-                            </span>
-                            {isAllowed ? (
-                              <Badge variant="success">חפיפה מאושרת</Badge>
-                            ) : (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="border-amber-400 text-amber-700 hover:bg-amber-100"
-                                onClick={() => handleAllowOverlap(conflict)}
-                              >
-                                <Users className="h-3 w-3" />
-                                אפשר חפיפה
-                              </Button>
-                            )}
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            {conflict.message}
-                          </p>
-                          <div className="space-y-1">
-                            {conflict.items.map((item) => (
-                              <div
-                                key={`${item.type}-${item.id}`}
-                                className="text-xs px-2 py-1 rounded bg-white/60"
-                              >
-                                {item.type === "track" ? "רמה" : item.type === "meeting" ? "ישיבה" : "דרישה"}:{" "}
-                                {item.label}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    {allowedOverlaps.size > 0 && (
-                      <Button
-                        className="w-full"
-                        onClick={() => {
-                          setSolveResult(null);
-                          setOverlaps([]);
-                          setElapsedTimer(0);
-                          solveMut.mutate();
-                        }}
-                        disabled={solveMut.isPending}
+                    {overlaps.map((conflict) => (
+                      <div
+                        key={conflict.teacher_id}
+                        className="rounded-md border border-red-200 bg-red-50 p-3 space-y-2"
                       >
-                        <Play className="h-4 w-4" />
-                        הרץ שוב עם חפיפות מאושרות
-                      </Button>
-                    )}
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-sm">
+                            {conflict.teacher_name}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-amber-400 text-amber-700 hover:bg-amber-100"
+                            onClick={() => handleAllowOverlap(conflict)}
+                          >
+                            <Users className="h-3 w-3" />
+                            אפשר חפיפה
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {conflict.message}
+                        </p>
+                        <div className="space-y-1">
+                          {conflict.items.map((item) => (
+                            <div
+                              key={`${item.type}-${item.id}`}
+                              className="text-xs px-2 py-1 rounded bg-white/60"
+                            >
+                              {item.type === "track" ? "רמה" : item.type === "meeting" ? "ישיבה" : item.type === "teacher_absence" ? "היעדרות" : "דרישה"}:{" "}
+                              {item.label}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+              {/* Approved overlaps when INFEASIBLE */}
+              {solveResult.status === "INFEASIBLE" &&
+                approvedOverlaps.length > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 text-green-800 bg-green-50 p-3 rounded-md border border-green-200">
+                      <CheckCircle2 className="h-5 w-5 shrink-0" />
+                      <div className="flex-1">
+                        <p className="font-medium">
+                          {approvedOverlaps.length} חפיפות מאושרות
+                        </p>
+                      </div>
+                    </div>
+
+                    {approvedOverlaps.map((conflict) => (
+                      <div
+                        key={`infeasible-approved-${conflict.teacher_id}`}
+                        className="rounded-md border border-green-200 bg-green-50/50 p-3 space-y-2"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-sm">
+                            {conflict.teacher_name}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-red-300 text-red-600 hover:bg-red-50"
+                            onClick={() => handleRevokeOverlap(conflict)}
+                          >
+                            <Undo2 className="h-3 w-3" />
+                            בטל אישור
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {conflict.message}
+                        </p>
+                        <div className="space-y-1">
+                          {conflict.items.map((item) => (
+                            <div
+                              key={`${item.type}-${item.id}`}
+                              className="text-xs px-2 py-1 rounded bg-white/60"
+                            >
+                              {item.type === "track" ? "רמה" : item.type === "meeting" ? "ישיבה" : item.type === "teacher_absence" ? "היעדרות" : "דרישה"}:{" "}
+                              {item.label}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -570,7 +741,7 @@ export default function SolverPage() {
                   ))}
 
                   {/* Prompt to clear overlaps after successful solve */}
-                  {allowedOverlaps.size > 0 && (
+                  {approvedOverlaps.length > 0 && (
                     <div className="flex items-center gap-3 p-3 rounded-md bg-amber-50 border border-amber-200">
                       <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
                       <span className="text-sm text-amber-800 flex-1">

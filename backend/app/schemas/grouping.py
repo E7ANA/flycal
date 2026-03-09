@@ -22,6 +22,8 @@ class GroupingClusterUpdate(BaseModel):
     # For SHARED_LESSON: sync the single track
     teacher_id: int | None = None
     hours_per_week: int | None = None
+    consecutive_count: int | None = None
+    consecutive_mode: str | None = None
 
 
 class TrackSummary(BaseModel):
@@ -42,6 +44,8 @@ class GroupingClusterRead(BaseModel):
     grade_id: int | None = None
     source_class_ids: list[int] = []
     cluster_type: str = "REGULAR"
+    consecutive_count: int | None = None
+    consecutive_mode: str | None = None
     tracks: list[TrackSummary] = []
 
     model_config = {"from_attributes": True}

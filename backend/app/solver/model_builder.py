@@ -35,6 +35,10 @@ class SolverData:
     homeroom_map: dict[int, int] = field(default_factory=dict)
     # teacher_id -> min_free_days (from MIN_FREE_DAYS constraints)
     min_free_days_map: dict[int, int] = field(default_factory=dict)
+    # Specific overlap pairs: set of ((type1, id1), (type2, id2)) — normalized
+    allowed_overlap_pairs: set[tuple[tuple[str, int], tuple[str, int]]] = field(
+        default_factory=set
+    )
     # Derived lookups
     available_slots: list[tuple[str, int]] = field(default_factory=list)
     days: list[str] = field(default_factory=list)
@@ -77,6 +81,14 @@ class SolverVariables:
     # Per-penalty group labels for per-grade score breakdown
     # Maps penalty index -> group label (e.g., "ז'1", "ח'2")
     penalty_labels: dict[int, str] = field(default_factory=dict)
+
+
+def _normalize_pair(
+    t1: str, id1: int, t2: str, id2: int,
+) -> tuple[tuple[str, int], tuple[str, int]]:
+    """Normalize an overlap pair so (A, B) == (B, A)."""
+    a, b = (t1, id1), (t2, id2)
+    return (a, b) if a <= b else (b, a)
 
 
 def load_solver_data(db: Session, school_id: int) -> SolverData:
@@ -172,6 +184,18 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
                     min_free_days_map.get(c.target_id, 0), min_days
                 )
 
+    # Load specific allowed overlap pairs
+    from app.models.timetable import AllowedOverlap
+    allowed_overlap_pairs: set[tuple[tuple[str, int], tuple[str, int]]] = set()
+    ao_rows = (
+        db.query(AllowedOverlap)
+        .filter(AllowedOverlap.school_id == school_id)
+        .all()
+    )
+    for ao in ao_rows:
+        pair = _normalize_pair(ao.item1_type, ao.item1_id, ao.item2_type, ao.item2_id)
+        allowed_overlap_pairs.add(pair)
+
     return SolverData(
         school=school,
         class_groups=class_groups,
@@ -183,6 +207,7 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
         teacher_blocked_slots=teacher_blocked_slots,
         homeroom_map=homeroom_map,
         min_free_days_map=min_free_days_map,
+        allowed_overlap_pairs=allowed_overlap_pairs,
     )
 
 
@@ -307,63 +332,80 @@ def _add_teacher_no_overlap(
                 req.co_teacher_ids
             )
 
-    # Build set of overlap-allowed requirement keys (c_id, s_id, t_id)
-    overlap_req_keys: set[tuple[int, int, int]] = set()
+    # Pre-build requirement id lookup: (c_id, s_id, t_id) -> requirement id
+    req_id_map: dict[tuple[int, int, int], int] = {}
     for req in data.requirements:
-        if getattr(req, "allow_overlap", False) and req.teacher_id and not req.is_grouped:
-            overlap_req_keys.add((req.class_group_id, req.subject_id, req.teacher_id))
-
-    # Build set of overlap-allowed track IDs
-    overlap_track_ids: set[int] = set()
-    for cluster in data.clusters:
-        for track in cluster.tracks:
-            if getattr(track, "allow_overlap", False):
-                overlap_track_ids.add(track.id)
+        if req.teacher_id is not None and not req.is_grouped:
+            req_id_map[(req.class_group_id, req.subject_id, req.teacher_id)] = req.id
 
     for teacher_id in teacher_ids:
         for day, period in data.available_slots:
-            vars_at_slot: list[cp_model.IntVar] = []
+            # Collect (item_type, item_id, var) tuples — ALL items, no skipping
+            items_at_slot: list[tuple[str, int, cp_model.IntVar]] = []
 
             # Regular requirement variables for this teacher at this slot
             for key, var in variables.x.items():
                 c_id, s_id, t_id, d, p = key
                 if d != day or p != period:
                     continue
-                # Skip overlap-allowed requirements
-                if (c_id, s_id, t_id) in overlap_req_keys:
-                    continue
                 # Primary teacher match
                 if t_id == teacher_id:
-                    vars_at_slot.append(var)
-                # Co-teacher match: this teacher appears as co-teacher of this requirement
+                    rid = req_id_map.get((c_id, s_id, t_id), 0)
+                    items_at_slot.append(("requirement", rid, var))
+                # Co-teacher match
                 elif teacher_id in co_teacher_map.get((c_id, s_id, t_id), []):
-                    vars_at_slot.append(var)
+                    rid = req_id_map.get((c_id, s_id, t_id), 0)
+                    items_at_slot.append(("requirement", rid, var))
 
             # Track variables for this teacher at this slot
             for cluster in data.clusters:
                 for track in cluster.tracks:
                     if track.teacher_id == teacher_id:
-                        # Skip overlap-allowed tracks
-                        if track.id in overlap_track_ids:
-                            continue
                         tk = (track.id, day, period)
                         if tk in variables.x_track:
-                            vars_at_slot.append(variables.x_track[tk])
+                            items_at_slot.append(("track", track.id, variables.x_track[tk]))
 
             # Meeting variables for this teacher at this slot
-            # (only mandatory-attendance meetings without allow_overlap are HARD no-overlap)
+            # (only mandatory-attendance meetings participate in no-overlap)
             for meeting in data.meetings:
                 if not getattr(meeting, "is_mandatory_attendance", True):
                     continue  # Flexible meetings handled by brain as SOFT
-                if getattr(meeting, "allow_overlap", False):
-                    continue  # Meeting explicitly allows overlap with lessons
                 if any(t.id == teacher_id for t in meeting.teachers):
                     mk = (meeting.id, day, period)
                     if mk in variables.x_meeting:
-                        vars_at_slot.append(variables.x_meeting[mk])
+                        items_at_slot.append(("meeting", meeting.id, variables.x_meeting[mk]))
 
-            if len(vars_at_slot) > 1:
-                model.add(sum(vars_at_slot) <= 1)
+            if len(items_at_slot) <= 1:
+                continue
+
+            # Check if ANY pair has an allowed overlap
+            has_any_allowed = False
+            if data.allowed_overlap_pairs:
+                for i in range(len(items_at_slot)):
+                    for j in range(i + 1, len(items_at_slot)):
+                        pair = _normalize_pair(
+                            items_at_slot[i][0], items_at_slot[i][1],
+                            items_at_slot[j][0], items_at_slot[j][1],
+                        )
+                        if pair in data.allowed_overlap_pairs:
+                            has_any_allowed = True
+                            break
+                    if has_any_allowed:
+                        break
+
+            if not has_any_allowed:
+                # Fast path: no allowed overlaps — single sum constraint
+                model.add(sum(var for _, _, var in items_at_slot) <= 1)
+            else:
+                # Pairwise constraints, skipping allowed pairs
+                for i in range(len(items_at_slot)):
+                    for j in range(i + 1, len(items_at_slot)):
+                        pair = _normalize_pair(
+                            items_at_slot[i][0], items_at_slot[i][1],
+                            items_at_slot[j][0], items_at_slot[j][1],
+                        )
+                        if pair not in data.allowed_overlap_pairs:
+                            model.add(items_at_slot[i][2] + items_at_slot[j][2] <= 1)
 
 
 # ---------------------------------------------------------------------------
@@ -707,7 +749,15 @@ def _add_meetings_on_teaching_days(
             # no meeting can be scheduled on this day.
             # Skip teachers with no teaching assignments at all (admins/managers) —
             # they can attend meetings on any day.
+            # Also skip teachers excused from this meeting (approved via overlap system).
             for teacher in meeting.teachers:
+                # Check if teacher is excused from this meeting
+                excused_pair = _normalize_pair(
+                    "meeting", meeting.id, "teacher_absence", teacher.id
+                )
+                if excused_pair in data.allowed_overlap_pairs:
+                    continue  # Teacher excused — absent from this meeting
+
                 all_teacher_vars = teacher_day_vars.get(teacher.id, {})
                 has_any_teaching = any(
                     len(vars_list) > 0 for vars_list in all_teacher_vars.values()

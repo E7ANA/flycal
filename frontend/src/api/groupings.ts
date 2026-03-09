@@ -62,6 +62,8 @@ export async function updateGroupingCluster(
     cluster_type: ClusterType;
     teacher_id: number | null;
     hours_per_week: number | null;
+    consecutive_count: number | null;
+    consecutive_mode: string | null;
   }>,
 ): Promise<ClusterResponse> {
   const { data } = await api.put<ClusterResponse>(

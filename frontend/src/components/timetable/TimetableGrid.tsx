@@ -30,6 +30,13 @@ export interface PresenceSlot {
   slot_type: string; // "שהייה" | "שהייה (ישיבה)" | "פרטני" | "חלון"
 }
 
+/** Absent teacher info for a meeting */
+export interface MeetingAbsenceInfo {
+  meeting_id: number;
+  teacher_id: number;
+  teacher_name: string;
+}
+
 interface TimetableGridProps {
   lessons: ScheduledLesson[];
   days: string[];
@@ -47,6 +54,8 @@ interface TimetableGridProps {
   meetingMap?: Record<number, MeetingInfo>;
   /** Presence annotations for empty slots (teacher view only) */
   presenceSlots?: PresenceSlot[];
+  /** Teachers absent from meetings (approved absences) */
+  meetingAbsences?: MeetingAbsenceInfo[];
 }
 
 /**
@@ -114,6 +123,7 @@ export function TimetableGrid({
   meetings = [],
   meetingMap = {},
   presenceSlots = [],
+  meetingAbsences = [],
 }: TimetableGridProps) {
   const periods = Array.from({ length: maxPeriod }, (_, i) => i + 1);
 
@@ -238,6 +248,9 @@ export function TimetableGrid({
                     })}
                     {cellMeetings.map((m, i) => {
                       const info = meetingMap[m.meeting_id];
+                      const absentTeachers = meetingAbsences.filter(
+                        (a) => a.meeting_id === m.meeting_id,
+                      );
                       return (
                         <div
                           key={`m-${i}`}
@@ -251,6 +264,14 @@ export function TimetableGrid({
                         >
                           <div className="font-medium">
                             {info?.name ?? `ישיבה ${m.meeting_id}`}
+                            {absentTeachers.length > 0 && (
+                              <span
+                                className="text-amber-600 mr-1 cursor-help"
+                                title={`נעדרים: ${absentTeachers.map((a) => a.teacher_name).join(", ")}`}
+                              >
+                                *
+                              </span>
+                            )}
                           </div>
                         </div>
                       );

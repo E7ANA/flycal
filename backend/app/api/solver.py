@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db, SessionLocal
 from app.models.meeting import Meeting, meeting_teachers
-from app.models.timetable import ScheduledLesson, ScheduledMeeting, Solution
+from app.models.timetable import AllowedOverlap, ScheduledLesson, ScheduledMeeting, Solution
 from app.models.class_group import Track
 from app.models.subject import Subject, SubjectRequirement
 from app.models.teacher import Teacher
@@ -43,11 +43,20 @@ class SolveRequest(BaseModel):
     num_workers: int | None = None
 
 
+class DiagnosisItem(BaseModel):
+    source: str            # "user_constraint" | "brain_rule" | "system" | "combination"
+    name: str
+    constraint_id: int | None = None
+    rule_type: str | None = None
+    details: str = ""
+
+
 class SolveResponse(BaseModel):
     status: str
     message: str
     solve_time: float
     solutions: list[SolutionRead]
+    diagnosis: list[DiagnosisItem] | None = None
 
 
 @router.post("/solve", response_model=SolveResponse)
@@ -60,11 +69,24 @@ def run_solver(req: SolveRequest, db: Session = Depends(get_db)):
         max_solutions=req.max_solutions,
         num_workers=req.num_workers,
     )
+    diag_items = None
+    if result.diagnosis:
+        diag_items = [
+            DiagnosisItem(
+                source=d.source,
+                name=d.name,
+                constraint_id=d.constraint_id,
+                rule_type=d.rule_type,
+                details=d.details,
+            )
+            for d in result.diagnosis
+        ]
     return SolveResponse(
         status=result.status.value,
         message=result.message,
         solve_time=round(result.solve_time, 2),
         solutions=[SolutionRead.model_validate(s) for s in result.solutions],
+        diagnosis=diag_items,
     )
 
 
@@ -93,11 +115,24 @@ def _solve_in_thread(
             num_workers=num_workers,
             job_id=job_id,
         )
+        diag_items = None
+        if result.diagnosis:
+            diag_items = [
+                DiagnosisItem(
+                    source=d.source,
+                    name=d.name,
+                    constraint_id=d.constraint_id,
+                    rule_type=d.rule_type,
+                    details=d.details,
+                )
+                for d in result.diagnosis
+            ]
         resp = SolveResponse(
             status=result.status.value,
             message=result.message,
             solve_time=round(result.solve_time, 2),
             solutions=[SolutionRead.model_validate(s) for s in result.solutions],
+            diagnosis=diag_items,
         )
         with _solve_results_lock:
             _solve_results[job_id] = resp
@@ -495,10 +530,16 @@ class OverlapConflict(BaseModel):
     message: str
 
 
-@router.post("/detect-overlaps", response_model=list[OverlapConflict])
+class OverlapDetectionResult(BaseModel):
+    conflicts: list[OverlapConflict]
+    approved: list[OverlapConflict]
+
+
+@router.post("/detect-overlaps", response_model=OverlapDetectionResult)
 def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
     """Detect teachers assigned to multiple concurrent items (tracks in synced clusters,
-    or multiple requirements where pinned_slots collide)."""
+    or multiple requirements where pinned_slots collide).
+    Returns both unresolved conflicts AND approved overlaps."""
     data = load_solver_data(db, req.school_id)
 
     # Build teacher -> list of assigned items + hours
@@ -556,6 +597,7 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
             teacher_items.setdefault(t.id, []).append(item)
 
     conflicts: list[OverlapConflict] = []
+    approved_cluster: list[OverlapConflict] = []
     seen_teacher_conflicts: set[int] = set()
 
     # ── Check 1: teacher assigned to multiple tracks in same synced cluster ──
@@ -579,20 +621,36 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
                 )
                 for t in tks
             ]
-            conflicts.append(OverlapConflict(
+            # Check if ALL pairs in this group are approved
+            all_approved = True
+            for i in range(len(tks)):
+                for j in range(i + 1, len(tks)):
+                    pair = _normalize_pair("track", tks[i].id, "track", tks[j].id)
+                    if pair not in data.allowed_overlap_pairs:
+                        all_approved = False
+                        break
+                if not all_approved:
+                    break
+
+            entry = OverlapConflict(
                 teacher_id=tid,
                 teacher_name=tname,
                 items=items_for_conflict,
                 message=(
                     f"מורה {tname} משובצ/ת ל-{len(tks)} רמות באשכול "
-                    f"\"{cluster.name}\" שמסונכרנות יחד. "
-                    f"אפשר חפיפה כדי לאפשר שיבוץ במקביל."
+                    f"\"{cluster.name}\" שמסונכרנות יחד."
+                    + ("" if all_approved else " אפשר חפיפה כדי לאפשר שיבוץ במקביל.")
                 ),
-            ))
+            )
+            if all_approved:
+                approved_cluster.append(entry)
+            else:
+                conflicts.append(entry)
 
     # ── Check 2: pinned-slot collisions (req vs track, req vs req, etc.) ──
-    # Build teacher -> [(day, period, item_type, item_id, source_label, allow_overlap)]
-    teacher_pinned: dict[int, list[tuple[str, int, str, int, str, bool]]] = {}
+    # Build teacher -> [(day, period, item_type, item_id, source_label)]
+    from app.solver.model_builder import _normalize_pair
+    teacher_pinned: dict[int, list[tuple[str, int, str, int, str]]] = {}
 
     for r in data.requirements:
         if r.is_grouped or r.teacher_id is None:
@@ -603,12 +661,11 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
         subj_name = r.subject.name if r.subject else f"מקצוע {r.subject_id}"
         cg_name = next((cg.name for cg in data.class_groups if cg.id == r.class_group_id), "")
         label = f"{subj_name} ל{cg_name} ({r.hours_per_week}ש)"
-        ao = bool(getattr(r, "allow_overlap", False))
         for slot in pinned:
             day, period = slot.get("day"), slot.get("period")
             if day and period:
                 teacher_pinned.setdefault(r.teacher_id, []).append(
-                    (day, period, "requirement", r.id, label, ao)
+                    (day, period, "requirement", r.id, label)
                 )
 
     # Collect pinned tracks (synced clusters inherit pins)
@@ -629,49 +686,65 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
         for track in cluster.tracks:
             if track.teacher_id is None or getattr(track, "is_secondary", False):
                 continue
-            ao = bool(getattr(track, "allow_overlap", False))
             label = f"רצועה '{track.name}' ({cluster.name}, {track.hours_per_week}ש)"
             for day, period in inherited:
                 teacher_pinned.setdefault(track.teacher_id, []).append(
-                    (day, period, "track", track.id, label, ao)
+                    (day, period, "track", track.id, label)
                 )
 
     for meeting in data.meetings:
         pinned = getattr(meeting, "pinned_slots", None)
         if not pinned:
             continue
-        ao = bool(getattr(meeting, "allow_overlap", False))
         for slot in pinned:
             day, period = slot.get("day"), slot.get("period")
             if day and period:
                 for t in meeting.teachers:
                     teacher_pinned.setdefault(t.id, []).append(
-                        (day, period, "meeting", meeting.id, f"ישיבה '{meeting.name}'", ao)
+                        (day, period, "meeting", meeting.id, f"ישיבה '{meeting.name}'")
                     )
 
     # Find collisions: same teacher, same (day, period), different items
-    # Skip collisions where ALL involved items have allow_overlap=True
+    # Separate into unresolved conflicts vs approved overlaps
+    approved: list[OverlapConflict] = []
     for tid, entries in teacher_pinned.items():
         if tid in seen_teacher_conflicts:
             continue
-        by_slot: dict[tuple[str, int], list[tuple[str, int, str, bool]]] = {}
-        for day, period, item_type, item_id, label, ao in entries:
-            by_slot.setdefault((day, period), []).append((item_type, item_id, label, ao))
+        by_slot: dict[tuple[str, int], list[tuple[str, int, str]]] = {}
+        for day, period, item_type, item_id, label in entries:
+            by_slot.setdefault((day, period), []).append((item_type, item_id, label))
 
-        colliding_items: dict[tuple[str, int], str] = {}  # unique (type, id) -> label
+        colliding_items: dict[tuple[str, int], str] = {}
+        approved_items: dict[tuple[str, int], str] = {}
         has_collision = False
+        has_approved = False
         for (day, period), slot_entries in by_slot.items():
             if len(slot_entries) > 1:
-                # Skip if ALL items in this slot have allow_overlap
-                if all(ao for _, _, _, ao in slot_entries):
-                    continue
-                has_collision = True
-                for item_type, item_id, label, _ao in slot_entries:
-                    colliding_items[(item_type, item_id)] = label
+                any_disallowed = False
+                for i in range(len(slot_entries)):
+                    for j in range(i + 1, len(slot_entries)):
+                        pair = _normalize_pair(
+                            slot_entries[i][0], slot_entries[i][1],
+                            slot_entries[j][0], slot_entries[j][1],
+                        )
+                        if pair not in data.allowed_overlap_pairs:
+                            any_disallowed = True
+                            break
+                    if any_disallowed:
+                        break
+                if any_disallowed:
+                    has_collision = True
+                    for item_type, item_id, label in slot_entries:
+                        colliding_items[(item_type, item_id)] = label
+                else:
+                    has_approved = True
+                    for item_type, item_id, label in slot_entries:
+                        approved_items[(item_type, item_id)] = label
+
+        tname = teacher_name_map.get(tid, f"#{tid}")
 
         if has_collision:
             seen_teacher_conflicts.add(tid)
-            tname = teacher_name_map.get(tid, f"#{tid}")
             items_list = [
                 OverlapItem(
                     type=item_type, id=item_id,
@@ -681,13 +754,21 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
                 )
                 for (item_type, item_id), label in colliding_items.items()
             ]
-            # Build collision description
             collision_descs = []
             for (day, period), slot_entries in by_slot.items():
-                if len(slot_entries) > 1 and not all(ao for _, _, _, ao in slot_entries):
-                    from app.solver.engine import _day_he
-                    sources = " + ".join(lbl for _, _, lbl, _ in slot_entries)
-                    collision_descs.append(f"{_day_he(day)} שעה {period}: {sources}")
+                if len(slot_entries) > 1:
+                    any_disallowed = any(
+                        _normalize_pair(
+                            slot_entries[i][0], slot_entries[i][1],
+                            slot_entries[j][0], slot_entries[j][1],
+                        ) not in data.allowed_overlap_pairs
+                        for i in range(len(slot_entries))
+                        for j in range(i + 1, len(slot_entries))
+                    )
+                    if any_disallowed:
+                        from app.solver.engine import _day_he
+                        sources = " + ".join(lbl for _, _, lbl in slot_entries)
+                        collision_descs.append(f"{_day_he(day)} שעה {period}: {sources}")
 
             conflicts.append(OverlapConflict(
                 teacher_id=tid,
@@ -697,6 +778,42 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
                     f"מורה {tname}: התנגשות הצמדות — "
                     + "; ".join(collision_descs)
                     + ". אפשר חפיפה כדי לאפשר שיבוץ במקביל."
+                ),
+            ))
+
+        if has_approved:
+            approved_list = [
+                OverlapItem(
+                    type=item_type, id=item_id,
+                    label=label,
+                    teacher_id=tid,
+                    teacher_name=tname,
+                )
+                for (item_type, item_id), label in approved_items.items()
+            ]
+            approved_descs = []
+            for (day, period), slot_entries in by_slot.items():
+                if len(slot_entries) > 1:
+                    all_allowed = all(
+                        _normalize_pair(
+                            slot_entries[i][0], slot_entries[i][1],
+                            slot_entries[j][0], slot_entries[j][1],
+                        ) in data.allowed_overlap_pairs
+                        for i in range(len(slot_entries))
+                        for j in range(i + 1, len(slot_entries))
+                    )
+                    if all_allowed:
+                        from app.solver.engine import _day_he
+                        sources = " + ".join(lbl for _, _, lbl in slot_entries)
+                        approved_descs.append(f"{_day_he(day)} שעה {period}: {sources}")
+
+            approved.append(OverlapConflict(
+                teacher_id=tid,
+                teacher_name=tname,
+                items=approved_list,
+                message=(
+                    f"מורה {tname}: חפיפה מאושרת — "
+                    + "; ".join(approved_descs)
                 ),
             ))
 
@@ -723,42 +840,176 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
                 ),
             ))
 
-    return conflicts
+    # ── Check 4: pinned meeting attendance conflicts ──
+    # For pinned meetings, detect teachers whose teaching is forced to other days
+    # (all their tracks are pinned to days that don't include the meeting day).
+    # These teachers can be excused from the meeting.
+    approved_absences: list[OverlapConflict] = []
+
+    # Precompute: which days are forced for each cluster (from pinned tracks)
+    cluster_forced_days: dict[int, set[str]] = {}
+    for cluster in data.clusters:
+        forced: set[str] = set()
+        for track in cluster.tracks:
+            pinned = getattr(track, "pinned_slots", None)
+            if pinned:
+                for s in pinned:
+                    if s.get("day"):
+                        forced.add(s["day"])
+        if forced:
+            cluster_forced_days[cluster.id] = forced
+
+    for meeting in data.meetings:
+        pinned = getattr(meeting, "pinned_slots", None)
+        if not pinned:
+            continue
+        meeting_days = set(s["day"] for s in pinned if s.get("day"))
+        if not meeting_days:
+            continue
+
+        for teacher in meeting.teachers:
+            tid = teacher.id
+            tname = teacher_name_map.get(tid, teacher.name if hasattr(teacher, "name") else f"#{tid}")
+
+            # Check if teacher has any non-track (flexible) teaching
+            has_flexible = any(
+                r.teacher_id == tid and not r.is_grouped
+                for r in data.requirements
+            )
+            if has_flexible:
+                continue  # Requirements can be placed on meeting day
+
+            # Collect days forced by teacher's tracks
+            teacher_forced_days: set[str] = set()
+            has_unpinned = False
+            for cluster in data.clusters:
+                for track in cluster.tracks:
+                    if track.teacher_id != tid:
+                        continue
+                    cdays = cluster_forced_days.get(cluster.id)
+                    if cdays:
+                        teacher_forced_days.update(cdays)
+                    else:
+                        has_unpinned = True
+
+            if has_unpinned:
+                continue  # Unpinned tracks can be placed on meeting day
+
+            if not teacher_forced_days:
+                continue  # No teaching at all (admin)
+
+            # Teacher only teaches via pinned tracks — check if any day overlaps
+            if teacher_forced_days.intersection(meeting_days):
+                continue  # Teacher teaches on at least one meeting day
+
+            # Conflict: teacher's teaching days don't include any meeting day
+            from app.solver.engine import _day_he
+            meeting_days_he = ", ".join(_day_he(d) for d in sorted(meeting_days))
+            teach_days_he = ", ".join(_day_he(d) for d in sorted(teacher_forced_days))
+
+            pair = _normalize_pair("meeting", meeting.id, "teacher_absence", tid)
+            is_approved = pair in data.allowed_overlap_pairs
+
+            meeting_item = OverlapItem(
+                type="meeting", id=meeting.id,
+                label=f"ישיבה '{meeting.name}' ({meeting_days_he})",
+                teacher_id=tid,
+                teacher_name=tname,
+            )
+            absence_item = OverlapItem(
+                type="teacher_absence", id=tid,
+                label=f"מלמד/ת רק ב{teach_days_he}",
+                teacher_id=tid,
+                teacher_name=tname,
+            )
+
+            entry = OverlapConflict(
+                teacher_id=tid,
+                teacher_name=tname,
+                items=[meeting_item, absence_item],
+                message=(
+                    f"מורה {tname} לא מלמד/ת ביום הישיבה ({meeting_days_he}) "
+                    f"— מלמד/ת רק ב{teach_days_he}. "
+                    + ("נעדר/ת מהישיבה (מאושר)." if is_approved
+                       else "אשר/י היעדרות מהישיבה.")
+                ),
+            )
+            if is_approved:
+                approved_absences.append(entry)
+            else:
+                conflicts.append(entry)
+
+    return OverlapDetectionResult(
+        conflicts=conflicts,
+        approved=approved_cluster + approved + approved_absences,
+    )
 
 
 class OverlapToggleRequest(BaseModel):
+    school_id: int
     items: list[dict]  # [{"type": "requirement"|"track"|"meeting", "id": int}]
     allow: bool
 
 
 @router.post("/toggle-overlaps")
 def toggle_overlaps(req: OverlapToggleRequest, db: Session = Depends(get_db)):
-    """Batch set allow_overlap on requirements, tracks, and/or meetings."""
+    """Create or remove specific allowed overlap pairs.
+
+    When allow=True: for all pairs in the items list, create AllowedOverlap
+    records so ONLY those specific pairs can coexist.
+    When allow=False: remove the specific pairs.
+    """
+    from app.solver.model_builder import _normalize_pair
+
+    # Build all pairs from the items list
+    pairs: list[tuple[str, int, str, int]] = []
+    for i in range(len(req.items)):
+        for j in range(i + 1, len(req.items)):
+            a, b = req.items[i], req.items[j]
+            pairs.append((a["type"], a["id"], b["type"], b["id"]))
+
     updated = 0
-    for item in req.items:
-        if item["type"] == "requirement":
-            obj = db.get(SubjectRequirement, item["id"])
-            if obj:
-                obj.allow_overlap = req.allow
-                updated += 1
-        elif item["type"] == "track":
-            obj = db.get(Track, item["id"])
-            if obj:
-                obj.allow_overlap = req.allow
-                updated += 1
-        elif item["type"] == "meeting":
-            obj = db.get(Meeting, item["id"])
-            if obj:
-                obj.allow_overlap = req.allow
-                updated += 1
+    for t1, id1, t2, id2 in pairs:
+        nt1, nid1 = _normalize_pair(t1, id1, t2, id2)[0]
+        nt2, nid2 = _normalize_pair(t1, id1, t2, id2)[1]
+
+        existing = db.query(AllowedOverlap).filter(
+            AllowedOverlap.school_id == req.school_id,
+            AllowedOverlap.item1_type == nt1,
+            AllowedOverlap.item1_id == nid1,
+            AllowedOverlap.item2_type == nt2,
+            AllowedOverlap.item2_id == nid2,
+        ).first()
+
+        if req.allow and not existing:
+            db.add(AllowedOverlap(
+                school_id=req.school_id,
+                item1_type=nt1, item1_id=nid1,
+                item2_type=nt2, item2_id=nid2,
+            ))
+            updated += 1
+        elif not req.allow and existing:
+            db.delete(existing)
+            updated += 1
+
     db.commit()
     return {"updated": updated}
 
 
 @router.post("/clear-all-overlaps")
 def clear_all_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
-    """Reset allow_overlap=False on all requirements, tracks, and meetings for a school."""
+    """Remove all allowed overlap pairs for a school, and clear legacy flags."""
     count = 0
+
+    # Clear new pair-based overlaps
+    ao_rows = db.query(AllowedOverlap).filter(
+        AllowedOverlap.school_id == req.school_id
+    ).all()
+    for ao in ao_rows:
+        db.delete(ao)
+        count += 1
+
+    # Also clear legacy allow_overlap flags
     reqs = db.query(SubjectRequirement).filter(
         SubjectRequirement.school_id == req.school_id,
         SubjectRequirement.allow_overlap == True,
@@ -767,9 +1018,7 @@ def clear_all_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
         r.allow_overlap = False
         count += 1
 
-    tracks = db.query(Track).join(
-        Track.cluster
-    ).filter(
+    tracks = db.query(Track).join(Track.cluster).filter(
         Track.allow_overlap == True,
     ).all()
     for t in tracks:
@@ -786,6 +1035,31 @@ def clear_all_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
 
     db.commit()
     return {"cleared": count}
+
+
+@router.get("/meeting-absences")
+def get_meeting_absences(school_id: int, db: Session = Depends(get_db)):
+    """Return teachers excused from meetings (approved teacher_absence pairs)."""
+    absences = (
+        db.query(AllowedOverlap)
+        .filter(
+            AllowedOverlap.school_id == school_id,
+            AllowedOverlap.item2_type == "teacher_absence",
+        )
+        .all()
+    )
+    result = []
+    for ao in absences:
+        meeting = db.get(Meeting, ao.item1_id) if ao.item1_type == "meeting" else None
+        teacher = db.get(Teacher, ao.item2_id)
+        if meeting and teacher:
+            result.append({
+                "meeting_id": meeting.id,
+                "meeting_name": meeting.name,
+                "teacher_id": teacher.id,
+                "teacher_name": teacher.name,
+            })
+    return result
 
 
 @router.post("/validate")

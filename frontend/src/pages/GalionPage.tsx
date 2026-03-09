@@ -8,7 +8,7 @@ import { fetchSubjects } from "@/api/subjects";
 import { fetchClasses } from "@/api/classes";
 import { fetchGrades } from "@/api/grades";
 import { fetchTeachers } from "@/api/teachers";
-import { fetchGroupingClusters } from "@/api/groupings";
+import { fetchGroupingClusters, updateGroupingCluster } from "@/api/groupings";
 import { DataTable } from "@/components/common/DataTable";
 import { Badge } from "@/components/common/Badge";
 import type { SubjectRequirement, Subject, ClassGroup, Grade, Teacher } from "@/types/models";
@@ -143,6 +143,16 @@ export default function GalionPage() {
     onError: () => toast.error("שגיאה בעדכון"),
   });
 
+  const updateClusterMut = useMutation({
+    mutationFn: ({ id, payload }: { id: number; payload: Record<string, unknown> }) =>
+      updateGroupingCluster(id, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["clusters", schoolId] });
+      toast.success("עודכן");
+    },
+    onError: () => toast.error("שגיאה בעדכון"),
+  });
+
   const subjectMap = useMemo(
     () => Object.fromEntries(subjects.map((s) => [s.id, s])),
     [subjects],
@@ -216,6 +226,8 @@ export default function GalionPage() {
         pinned_slots: null,
         co_teacher_ids: null,
         always_double: false,
+        consecutive_count: cluster.consecutive_count ?? null,
+        consecutive_mode: cluster.consecutive_mode ?? null,
         morning_priority: null,
       } as SubjectRequirement);
       seenClusters.add(cluster.id);
@@ -456,36 +468,66 @@ export default function GalionPage() {
             className: "w-20",
           },
           {
-            header: "שעה כפולה",
-            accessor: (r) => (
-              <input
-                type="checkbox"
-                checked={r.always_double}
-                onChange={(e) => {
-                  const checked = e.target.checked;
-                  if (r.is_grouped && r.grouping_cluster_id) {
-                    // Update ALL grouped reqs in this cluster
-                    const siblings = requirements.filter(
-                      (req) => req.grouping_cluster_id === r.grouping_cluster_id,
-                    );
-                    for (const sib of siblings) {
-                      updateMut.mutate({
-                        id: sib.id,
-                        payload: { always_double: checked },
-                      });
-                    }
-                  } else {
+            header: "רציפות",
+            accessor: (r) => {
+              // Derive current value: requirement fields > cluster fields > always_double
+              let currentVal = "";
+              if (r.consecutive_count && r.consecutive_mode) {
+                currentVal = `${r.consecutive_mode}_${r.consecutive_count}`;
+              } else if (r.is_grouped && r.grouping_cluster_id) {
+                const cluster = clusterMap[r.grouping_cluster_id];
+                if (cluster?.consecutive_count && cluster?.consecutive_mode) {
+                  currentVal = `${cluster.consecutive_mode}_${cluster.consecutive_count}`;
+                }
+              }
+              if (!currentVal && r.always_double) {
+                currentVal = "hard_2";
+              }
+
+              const handleChange = (val: string) => {
+                const consecPayload: Record<string, unknown> = val === ""
+                  ? { consecutive_count: null, consecutive_mode: null }
+                  : { consecutive_count: Number(val.split("_")[1]), consecutive_mode: val.split("_")[0] };
+
+                if (r.is_grouped && r.grouping_cluster_id) {
+                  // Always update the cluster itself
+                  updateClusterMut.mutate({
+                    id: r.grouping_cluster_id,
+                    payload: consecPayload,
+                  });
+                  // Also update any existing grouped requirements
+                  const siblings = requirements.filter(
+                    (req) => req.grouping_cluster_id === r.grouping_cluster_id,
+                  );
+                  for (const sib of siblings) {
                     updateMut.mutate({
-                      id: r.id,
-                      payload: { always_double: checked },
+                      id: sib.id,
+                      payload: { ...consecPayload, always_double: false },
                     });
                   }
-                }}
-                className="h-4 w-4 accent-primary cursor-pointer"
-                title={r.always_double ? "תמיד בשעה כפולה" : "ללא הגבלה"}
-              />
-            ),
-            className: "w-24 text-center",
+                } else {
+                  updateMut.mutate({
+                    id: r.id,
+                    payload: { ...consecPayload, always_double: false },
+                  });
+                }
+              };
+
+              return (
+                <select
+                  value={currentVal}
+                  onChange={(e) => handleChange(e.target.value)}
+                  className="text-xs border rounded px-1 py-0.5 bg-white cursor-pointer"
+                >
+                  <option value="">ללא</option>
+                  <option value="soft_2">העדפה 2</option>
+                  <option value="hard_2">חובה 2</option>
+                  <option value="soft_3">העדפה 3</option>
+                  <option value="hard_3">חובה 3</option>
+                </select>
+              );
+            },
+            className: "w-28 text-center",
           },
           {
             header: "חשיבות בוקר",

@@ -1354,11 +1354,16 @@ def _compile_grade_activity_hours(
 ) -> None:
     """HARD: Block timeslots beyond the max period for each day per grade.
 
-    Parameters: {"periods_per_day_map": {"SUNDAY": 8, "FRIDAY": 4, ...}}
+    Parameters:
+      periods_per_day_map: {"SUNDAY": 8, "FRIDAY": 4, ...}
+      allow_grouped_beyond: int | null  — if set, grouped tracks (הקבצות)
+          may extend up to this period even when the class limit is lower.
+          Example: allow_grouped_beyond=9 lets מגמות use period 9.
     target_type=GRADE, target_id=grade_id
     """
     periods_map = constraint.parameters.get("periods_per_day_map", {})
     grade_id = constraint.target_id
+    allow_grouped_beyond = constraint.parameters.get("allow_grouped_beyond")
     if not periods_map or not grade_id:
         return
 
@@ -1367,12 +1372,30 @@ def _compile_grade_activity_hours(
     if not grade_classes:
         return
 
+    # Build set of track variable names to skip when allow_grouped_beyond is set
+    track_var_names: set[str] = set()
+    if allow_grouped_beyond:
+        for cluster in data.clusters:
+            for track in cluster.tracks:
+                if track.teacher_id is None:
+                    continue
+                for tk, var in variables.x_track.items():
+                    tr_id, d, p = tk
+                    if tr_id == track.id:
+                        track_var_names.add(var.name)
+
     for cg in grade_classes:
         slot_vars = _vars_for_class(variables, data, cg.id)
         for (day, period), vlist in slot_vars.items():
             max_period = periods_map.get(day)
             if max_period is not None and period > max_period:
                 for var in vlist:
+                    # If allow_grouped_beyond is set and this is a track var
+                    # within the extended range, skip blocking it
+                    if (allow_grouped_beyond
+                            and period <= allow_grouped_beyond
+                            and var.name in track_var_names):
+                        continue
                     model.add(var == 0)
 
 
