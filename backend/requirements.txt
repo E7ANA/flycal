@@ -1,0 +1,31 @@
+# Web framework
+fastapi>=0.115
+uvicorn[standard]>=0.34
+
+# Database
+sqlalchemy>=2.0
+alembic>=1.14
+
+# Settings & validation
+pydantic>=2.10
+pydantic-settings>=2.7
+python-dotenv>=1.0
+
+# Solver
+ortools>=9.15
+
+# Import/Export
+openpyxl>=3.1
+python-multipart>=0.0.7
+
+# Task queue (Phase 2+)
+# celery>=5.4
+# redis>=5.2
+
+# Testing
+pytest>=8.3
+pytest-asyncio>=0.25
+httpx>=0.28
+
+# Dev tools
+black>=24.10
