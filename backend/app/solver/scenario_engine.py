@@ -126,6 +126,65 @@ def run_scenario_change_type(
         db.commit()
 
 
+def run_scenario_edit(
+    db: Session,
+    school_id: int,
+    baseline_solution_id: int,
+    edits: list[dict],
+    scenario_name: str,
+    max_time: int | None = None,
+    deviation_weight: int = 10,
+) -> dict:
+    """Apply edits on top of an existing solution and re-solve minimizing changes.
+
+    Each edit is a dict with:
+      type: "PIN_LESSON" | "BLOCK_TEACHER_SLOT" | "PIN_TEACHER_DAY_CONSECUTIVE"
+      params: { ...type-specific parameters }
+
+    The solver uses warm-start hints from the baseline and adds deviation penalties
+    to keep changes minimal.
+    """
+    baseline = db.get(Solution, baseline_solution_id)
+    if not baseline:
+        return {"error": "פתרון בסיס לא נמצא"}
+
+    if not edits:
+        return {"error": "לא סופקו שינויים"}
+
+    result = solve(
+        db,
+        school_id,
+        max_time=max_time,
+        max_solutions=1,
+        baseline_solution_id=baseline_solution_id,
+        edit_constraints=edits,
+        deviation_weight=deviation_weight,
+    )
+
+    # Tag solutions with scenario info
+    for sol in result.solutions:
+        sol.scenario_name = scenario_name
+        sol.is_baseline = False
+
+    db.commit()
+
+    # Compare with baseline
+    comparison = None
+    if result.solutions:
+        comparison = compare_solutions(db, baseline_solution_id, result.solutions[0].id)
+
+    return {
+        "status": result.status.value,
+        "message": result.message,
+        "solve_time": round(result.solve_time, 2),
+        "solutions": [
+            {"id": s.id, "total_score": s.total_score} for s in result.solutions
+        ],
+        "edits_applied": len(edits),
+        "comparison": comparison,
+    }
+
+
 def compare_solutions(
     db: Session,
     solution_id_a: int,

@@ -9,6 +9,9 @@ import {
   ShieldCheck,
   Users,
   Undo2,
+  UserMinus,
+  LockOpen,
+  Wrench,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
@@ -18,8 +21,10 @@ import {
   detectOverlaps,
   toggleOverlaps,
   clearAllOverlaps,
+  applyResolution,
   type OverlapConflict,
   type OverlapDetectionResult,
+  type OverlapResolution,
   type DiagnosisItem,
 } from "@/api/solver";
 import { Button } from "@/components/common/Button";
@@ -167,6 +172,24 @@ export default function SolverPage() {
     }
   };
 
+  const handleApplyResolution = async (resolution: OverlapResolution) => {
+    if (!resolution.meeting_id || !resolution.teacher_id) return;
+    try {
+      const res = await applyResolution(
+        resolution.action,
+        resolution.meeting_id,
+        resolution.teacher_id,
+      );
+      toast.success(res.message);
+      // Re-detect overlaps to refresh
+      const detected = await detectOverlaps(schoolId!);
+      setOverlaps(detected.conflicts);
+      setApprovedOverlaps(detected.approved);
+    } catch {
+      toast.error("שגיאה בביצוע הפעולה");
+    }
+  };
+
   if (!schoolId) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -301,6 +324,7 @@ export default function SolverPage() {
                 const isAllowed = conflict.items.every((item) =>
                   allowedOverlaps.has(`${item.type}:${item.id}`),
                 );
+                const hasResolutions = conflict.resolutions && conflict.resolutions.length > 0;
                 return (
                   <div
                     key={conflict.teacher_id}
@@ -342,6 +366,35 @@ export default function SolverPage() {
                         </div>
                       ))}
                     </div>
+                    {/* Resolution suggestions */}
+                    {hasResolutions && !isAllowed && (
+                      <div className="pt-1 border-t border-red-200 space-y-1.5">
+                        <div className="flex items-center gap-1.5 text-xs font-medium text-blue-700">
+                          <Wrench className="h-3 w-3" />
+                          פתרונות מומלצים:
+                        </div>
+                        {conflict.resolutions.map((res, idx) => (
+                          <Button
+                            key={idx}
+                            size="sm"
+                            variant="outline"
+                            className={
+                              res.action === "remove_from_meeting"
+                                ? "w-full justify-start text-xs border-blue-300 text-blue-700 hover:bg-blue-50"
+                                : "w-full justify-start text-xs border-orange-300 text-orange-700 hover:bg-orange-50"
+                            }
+                            onClick={() => handleApplyResolution(res)}
+                          >
+                            {res.action === "remove_from_meeting" ? (
+                              <UserMinus className="h-3 w-3 shrink-0" />
+                            ) : (
+                              <LockOpen className="h-3 w-3 shrink-0" />
+                            )}
+                            {res.label}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -624,7 +677,9 @@ export default function SolverPage() {
                       </div>
                     </div>
 
-                    {overlaps.map((conflict) => (
+                    {overlaps.map((conflict) => {
+                      const hasRes = conflict.resolutions && conflict.resolutions.length > 0;
+                      return (
                       <div
                         key={conflict.teacher_id}
                         className="rounded-md border border-red-200 bg-red-50 p-3 space-y-2"
@@ -657,8 +712,38 @@ export default function SolverPage() {
                             </div>
                           ))}
                         </div>
+                        {/* Resolution suggestions */}
+                        {hasRes && (
+                          <div className="pt-1 border-t border-red-200 space-y-1.5">
+                            <div className="flex items-center gap-1.5 text-xs font-medium text-blue-700">
+                              <Wrench className="h-3 w-3" />
+                              פתרונות מומלצים:
+                            </div>
+                            {conflict.resolutions.map((res, idx) => (
+                              <Button
+                                key={idx}
+                                size="sm"
+                                variant="outline"
+                                className={
+                                  res.action === "remove_from_meeting"
+                                    ? "w-full justify-start text-xs border-blue-300 text-blue-700 hover:bg-blue-50"
+                                    : "w-full justify-start text-xs border-orange-300 text-orange-700 hover:bg-orange-50"
+                                }
+                                onClick={() => handleApplyResolution(res)}
+                              >
+                                {res.action === "remove_from_meeting" ? (
+                                  <UserMinus className="h-3 w-3 shrink-0" />
+                                ) : (
+                                  <LockOpen className="h-3 w-3 shrink-0" />
+                                )}
+                                {res.label}
+                              </Button>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
 

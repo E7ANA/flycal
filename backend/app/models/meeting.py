@@ -37,6 +37,10 @@ class Meeting(Base):
     is_mandatory_attendance: Mapped[bool] = mapped_column(Boolean, default=True)
     # Allow teacher to have lessons at the same time as this meeting (skip no-overlap)
     allow_overlap: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Force meeting hours to be scheduled in consecutive periods (e.g. double period)
+    require_consecutive: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Teachers who MUST attend even when is_mandatory_attendance=False
+    locked_teacher_ids: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
 
     teachers: Mapped[list["Teacher"]] = relationship(secondary=meeting_teachers)
 

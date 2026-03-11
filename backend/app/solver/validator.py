@@ -201,12 +201,8 @@ def _check_teacher_capacity(data: SolverData) -> list[ValidationIssue]:
                     teacher_hours.get(track.teacher_id, 0) + track.hours_per_week
                 )
 
-    # Add meeting hours to each teacher's total
-    for meeting in data.meetings:
-        for t in meeting.teachers:
-            teacher_hours[t.id] = (
-                teacher_hours.get(t.id, 0) + meeting.hours_per_week
-            )
+    # NOTE: meeting hours are NOT counted — meetings are scheduled
+    # via separate x_meeting variables and don't compete for teaching slots.
 
     for tid, hours in teacher_hours.items():
         blocked = data.teacher_blocked_slots.get(tid, set())

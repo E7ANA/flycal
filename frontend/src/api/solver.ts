@@ -73,6 +73,16 @@ export async function fetchLessonsByTeacher(
   return data;
 }
 
+export async function fetchLessonsBySubject(
+  solutionId: number,
+  subjectId: number,
+): Promise<ScheduledLesson[]> {
+  const { data } = await api.get<ScheduledLesson[]>(
+    `/solutions/${solutionId}/by-subject/${subjectId}`,
+  );
+  return data;
+}
+
 export async function fetchScoreBreakdown(
   solutionId: number,
 ): Promise<ScoreBreakdown> {
@@ -142,11 +152,19 @@ export interface OverlapItem {
   teacher_name: string;
 }
 
+export interface OverlapResolution {
+  action: "remove_from_meeting" | "unlock_teacher";
+  label: string;
+  meeting_id: number | null;
+  teacher_id: number | null;
+}
+
 export interface OverlapConflict {
   teacher_id: number;
   teacher_name: string;
   items: OverlapItem[];
   message: string;
+  resolutions: OverlapResolution[];
 }
 
 export interface OverlapDetectionResult {
@@ -173,6 +191,18 @@ export async function toggleOverlaps(
     items,
     allow,
   });
+  return data;
+}
+
+export async function applyResolution(
+  action: string,
+  meetingId: number,
+  teacherId: number,
+): Promise<{ success: boolean; message: string }> {
+  const { data } = await api.post<{ success: boolean; message: string }>(
+    "/apply-resolution",
+    { action, meeting_id: meetingId, teacher_id: teacherId },
+  );
   return data;
 }
 

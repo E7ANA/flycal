@@ -19,6 +19,8 @@ class Subject(Base):
     always_double: Mapped[bool] = mapped_column(Boolean, default=False)
     # Blocked timeslots for this subject (e.g. "no sports on Sunday")
     blocked_slots: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
+    # Limit to at most 1 lesson in the last 2 periods of each day (per class)
+    limit_last_periods: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class SubjectRequirement(Base):

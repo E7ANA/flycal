@@ -12,6 +12,8 @@ class TeacherCreate(BaseModel):
     max_hours_per_week: int = 40
     min_hours_per_week: int | None = None
     employment_percentage: float | None = None
+    rubrica_hours: float | None = None
+    max_work_days: int | None = None
     subject_ids: list[int] = []
     is_coordinator: bool = False
     homeroom_class_id: int | None = None
@@ -28,6 +30,8 @@ class TeacherUpdate(BaseModel):
     max_hours_per_week: int | None = None
     min_hours_per_week: int | None = None
     employment_percentage: float | None = None
+    rubrica_hours: float | None = None
+    max_work_days: int | None = None
     subject_ids: list[int] | None = None
     is_coordinator: bool | None = None
     homeroom_class_id: int | None = None
@@ -46,6 +50,8 @@ class TeacherRead(BaseModel):
     max_hours_per_week: int
     min_hours_per_week: int | None
     employment_percentage: float | None
+    rubrica_hours: float | None = None
+    max_work_days: int | None = None
     subject_ids: list[int] = []
     is_coordinator: bool
     homeroom_class_id: int | None

@@ -21,6 +21,8 @@ class Teacher(Base):
     max_hours_per_week: Mapped[int] = mapped_column(Integer, default=40)
     min_hours_per_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
     employment_percentage: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rubrica_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_work_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Roles
     is_coordinator: Mapped[bool] = mapped_column(Boolean, default=False)

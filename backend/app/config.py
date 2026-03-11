@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     solver_max_solutions: int = 5
     solver_num_workers: int = 8
 
+    # AI
+    anthropic_api_key: str = ""
+
     # CORS
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 

@@ -988,22 +988,40 @@ def _apply_oz_la_tmura(
         _update_brain_id(brain_id)
 
 
-# ── Max teaching days by frontal hours (HARD) ────────────────────────────
+# ── Max teaching days by rubrica (general) hours (HARD) ──────────────────
 
-# Frontal hours → max teaching days (עוז לתמורה ימי עבודה)
+def _max_days_for_rubrica(rubrica: float) -> int | None:
+    """Return max teaching days allowed for given rubrica (general) hours.
+
+    Based on עוז לתמורה:
+    - Below 20 rubrica hours → max 2 days
+    - 20–27 rubrica hours → max 3 days
+    - Above 27 rubrica hours → max 4 days
+    """
+    if rubrica > 27:
+        return 4
+    if rubrica >= 20:
+        return 3
+    if rubrica > 0:
+        return 2
+    return None  # rubrica not set
+
+
+# Keep legacy helper for external callers (e.g. diagnosis)
 _FRONTAL_TO_MAX_DAYS: list[tuple[int, int, int]] = [
-    (1, 16, 3),   # 1-16 hours → max 3 days
-    (17, 18, 4),  # 17-18 hours → max 4 days
-    (19, 999, 5), # 19+ hours → max 5 days
+    (1, 11, 2),
+    (12, 16, 3),
+    (17, 18, 4),
+    (19, 999, 5),
 ]
 
 
 def _max_days_for_frontal(frontal: int) -> int:
-    """Return max teaching days allowed for given frontal hours."""
+    """Legacy helper — kept for diagnosis code."""
     for low, high, max_days in _FRONTAL_TO_MAX_DAYS:
         if low <= frontal <= high:
             return max_days
-    return 5  # fallback
+    return 5
 
 
 def _apply_max_days_by_frontal(
@@ -1012,14 +1030,24 @@ def _apply_max_days_by_frontal(
     variables: SolverVariables,
     teacher_frontal: dict[int, int],
 ) -> None:
-    """HARD: limit teaching days based on frontal hours.
+    """HARD: limit teaching days based on עוז לתמורה table.
 
-    1-16 frontal hours → max 3 days
-    17-18 frontal hours → max 4 days
-    19-24+ frontal hours → max 5 days
+    Combined table (rubrica-first, frontal fallback):
+    1. If teacher has rubrica hours defined:
+       - rubrica < 20 → max 2 work days
+       - rubrica 20–27 → max 3 work days
+       - rubrica > 27 → max 4 work days
+       - Override: 16+ frontal hours → allow at least 4 days
+    2. Fallback (no rubrica defined):
+       - < 12 frontal hours AND total estimated employment < 20 → max 2 days
+    3. MIN_FREE_DAYS always prevails (caps max_days further)
 
     Only counts days with actual teaching (lessons/tracks), NOT meetings.
     """
+    LOW_FRONTAL_THRESHOLD = 12
+    LOW_EMPLOYMENT_THRESHOLD = 20
+    LOW_MAX_DAYS = 2
+
     brain_id = _next_brain_id() - 1
 
     # Build teacher vars by day (lessons + tracks only, no meetings)
@@ -1047,11 +1075,38 @@ def _apply_max_days_by_frontal(
         if frontal <= 0:
             continue
 
-        max_days = _max_days_for_frontal(frontal)
-        # Free day always prevails: if teacher has MIN_FREE_DAYS, cap max_days
+        max_days: int | None = None
+        source = ""
+
+        # 0. Manual override — teacher has explicit max_work_days set
+        manual = data.teacher_max_work_days.get(t_id)
+        if manual is not None and manual > 0:
+            max_days = manual
+            source = "ידני"
+        else:
+            # 1. Try rubrica-based limit (rubrica = total employment hours)
+            rubrica = data.teacher_rubrica_map.get(t_id)
+            if rubrica is not None and rubrica > 0:
+                max_days = _max_days_for_rubrica(rubrica)
+                if max_days is not None:
+                    source = f"rubrica={rubrica}"
+                    # Override: 16+ frontal hours → allow 4 days regardless of rubrica
+                    if frontal > 16 and max_days < 4:
+                        max_days = 4
+
+            # 2. Fallback (no rubrica): low frontal hours → 2 days
+            if max_days is None and frontal < LOW_FRONTAL_THRESHOLD:
+                max_days = LOW_MAX_DAYS
+                source = f"frontal<{LOW_FRONTAL_THRESHOLD}"
+
+        if max_days is None:
+            continue  # No rule applies
+
+        # 3. Free day always prevails: if teacher has MIN_FREE_DAYS, cap max_days
         min_free = data.min_free_days_map.get(t_id, 0)
         if min_free > 0:
             max_days = min(max_days, total_days - min_free)
+
         by_day = teacher_day_vars.get(t_id, {})
 
         day_active: list[cp_model.IntVar] = []
@@ -1083,12 +1138,14 @@ def _apply_max_days_by_frontal(
             "teacher_id": t_id,
             "teacher_name": teacher_name,
             "frontal_hours": frontal,
+            "rubrica_hours": rubrica,
             "max_days": max_days,
+            "source": source,
         })
 
     if breakdown:
         variables.brain_info[brain_id] = {
-            "name": "ימי עבודה מקסימליים לפי שעות פרונטליות",
+            "name": "ימי עבודה מקסימליים לפי עוז לתמורה",
             "weight": 0,
             "is_hard": True,
             "breakdown": breakdown,

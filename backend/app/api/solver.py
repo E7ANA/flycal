@@ -304,6 +304,36 @@ def get_lessons_by_teacher(
 
 
 @router.get(
+    "/solutions/{solution_id}/by-subject/{subject_id}",
+    response_model=list[ScheduledLessonRead],
+)
+def get_lessons_by_subject(
+    solution_id: int, subject_id: int, db: Session = Depends(get_db)
+):
+    """Get all lessons for a specific subject across all classes."""
+    lessons = (
+        db.query(ScheduledLesson)
+        .filter(
+            ScheduledLesson.solution_id == solution_id,
+            ScheduledLesson.subject_id == subject_id,
+        )
+        .order_by(ScheduledLesson.day, ScheduledLesson.period)
+        .all()
+    )
+    # Deduplicate track lessons
+    seen: set[tuple] = set()
+    result: list[ScheduledLesson] = []
+    for l in lessons:
+        if l.track_id is not None:
+            key = (l.track_id, l.day, l.period)
+            if key in seen:
+                continue
+            seen.add(key)
+        result.append(l)
+    return result
+
+
+@router.get(
     "/solutions/{solution_id}/meetings",
     response_model=list[ScheduledMeetingRead],
 )
@@ -523,11 +553,22 @@ class OverlapItem(BaseModel):
     teacher_name: str
 
 
+class OverlapResolution(BaseModel):
+    """An actionable fix the user can apply to resolve an overlap."""
+    action: str  # "remove_from_meeting" | "unlock_teacher" | "remove_pinned_slot"
+    label: str  # Human-readable Hebrew description
+    meeting_id: int | None = None
+    teacher_id: int | None = None
+    day: str | None = None
+    period: int | None = None
+
+
 class OverlapConflict(BaseModel):
     teacher_id: int
     teacher_name: str
     items: list[OverlapItem]
     message: str
+    resolutions: list[OverlapResolution] = []
 
 
 class OverlapDetectionResult(BaseModel):
@@ -770,10 +811,37 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
                         sources = " + ".join(lbl for _, _, lbl in slot_entries)
                         collision_descs.append(f"{_day_he(day)} שעה {period}: {sources}")
 
+            # Build resolutions for meeting-related collisions
+            resolutions: list[OverlapResolution] = []
+            meeting_items_in_conflict = [
+                (item_type, item_id)
+                for (item_type, item_id) in colliding_items
+                if item_type == "meeting"
+            ]
+            for _mt, mid in meeting_items_in_conflict:
+                mtg = next((m for m in data.meetings if m.id == mid), None)
+                if mtg:
+                    locked_ids = set(getattr(mtg, "locked_teacher_ids", None) or [])
+                    mtg_name = mtg.name
+                    resolutions.append(OverlapResolution(
+                        action="remove_from_meeting",
+                        label=f"הסר את {tname} מישיבת \"{mtg_name}\"",
+                        meeting_id=mid,
+                        teacher_id=tid,
+                    ))
+                    if tid in locked_ids:
+                        resolutions.append(OverlapResolution(
+                            action="unlock_teacher",
+                            label=f"בטל נעילה של {tname} בישיבת \"{mtg_name}\"",
+                            meeting_id=mid,
+                            teacher_id=tid,
+                        ))
+
             conflicts.append(OverlapConflict(
                 teacher_id=tid,
                 teacher_name=tname,
                 items=items_list,
+                resolutions=resolutions,
                 message=(
                     f"מורה {tname}: התנגשות הצמדות — "
                     + "; ".join(collision_descs)
@@ -817,22 +885,61 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
                 ),
             ))
 
-    # ── Check 3: teacher with more total hours than available slots ──
+    # ── Check 3: teacher with more TEACHING hours than available slots ──
+    # Only count requirements + tracks (not meetings) — meetings are scheduled
+    # separately via x_meeting and don't compete for teaching slots.
     available_set = set(data.available_slots)
+    teacher_teaching_hours: dict[int, int] = {}
+    for r in data.requirements:
+        if r.is_grouped or r.teacher_id is None:
+            continue
+        teacher_teaching_hours[r.teacher_id] = (
+            teacher_teaching_hours.get(r.teacher_id, 0) + r.hours_per_week
+        )
+    for cluster in data.clusters:
+        for track in cluster.tracks:
+            if track.teacher_id is not None:
+                teacher_teaching_hours[track.teacher_id] = (
+                    teacher_teaching_hours.get(track.teacher_id, 0) + track.hours_per_week
+                )
 
     for teacher_id, items in teacher_items.items():
         if teacher_id in seen_teacher_conflicts:
             continue
+        teaching_hours = teacher_teaching_hours.get(teacher_id, 0)
+        if teaching_hours == 0:
+            continue  # Teacher only has meetings — no teaching slot conflict
         total_hours = teacher_hours.get(teacher_id, 0)
         blocked = data.teacher_blocked_slots.get(teacher_id, set())
         teacher_available = len(available_set - blocked)
 
         if total_hours > teacher_available and len(items) > 1:
             tname = teacher_name_map.get(teacher_id, f"#{teacher_id}")
+            # Build resolutions for meeting items
+            resolutions3: list[OverlapResolution] = []
+            for it in items:
+                if it.type == "meeting":
+                    mtg = next((m for m in data.meetings if m.id == it.id), None)
+                    if mtg:
+                        locked_ids = set(getattr(mtg, "locked_teacher_ids", None) or [])
+                        resolutions3.append(OverlapResolution(
+                            action="remove_from_meeting",
+                            label=f"הסר את {tname} מישיבת \"{mtg.name}\"",
+                            meeting_id=it.id,
+                            teacher_id=teacher_id,
+                        ))
+                        if teacher_id in locked_ids:
+                            resolutions3.append(OverlapResolution(
+                                action="unlock_teacher",
+                                label=f"בטל נעילה של {tname} בישיבת \"{mtg.name}\"",
+                                meeting_id=it.id,
+                                teacher_id=teacher_id,
+                            ))
             conflicts.append(OverlapConflict(
                 teacher_id=teacher_id,
                 teacher_name=tname,
                 items=items,
+                resolutions=resolutions3,
                 message=(
                     f"מורה {tname}: {total_hours} שעות נדרשות "
                     f"אך רק {teacher_available} משבצות פנויות. "
@@ -923,10 +1030,28 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
                 teacher_name=tname,
             )
 
+            locked_ids = set(getattr(meeting, "locked_teacher_ids", None) or [])
+            resolutions4: list[OverlapResolution] = [
+                OverlapResolution(
+                    action="remove_from_meeting",
+                    label=f"הסר את {tname} מישיבת \"{meeting.name}\"",
+                    meeting_id=meeting.id,
+                    teacher_id=tid,
+                ),
+            ]
+            if tid in locked_ids:
+                resolutions4.append(OverlapResolution(
+                    action="unlock_teacher",
+                    label=f"בטל נעילה של {tname} בישיבת \"{meeting.name}\"",
+                    meeting_id=meeting.id,
+                    teacher_id=tid,
+                ))
+
             entry = OverlapConflict(
                 teacher_id=tid,
                 teacher_name=tname,
                 items=[meeting_item, absence_item],
+                resolutions=resolutions4,
                 message=(
                     f"מורה {tname} לא מלמד/ת ביום הישיבה ({meeting_days_he}) "
                     f"— מלמד/ת רק ב{teach_days_he}. "
@@ -1035,6 +1160,55 @@ def clear_all_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
 
     db.commit()
     return {"cleared": count}
+
+
+class ApplyResolutionRequest(BaseModel):
+    action: str  # "remove_from_meeting" | "unlock_teacher"
+    meeting_id: int
+    teacher_id: int
+
+
+@router.post("/apply-resolution")
+def apply_resolution(req: ApplyResolutionRequest, db: Session = Depends(get_db)):
+    """Execute a resolution action to fix an overlap conflict."""
+    meeting = db.get(Meeting, req.meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="ישיבה לא נמצאה")
+
+    teacher = db.get(Teacher, req.teacher_id)
+    if not teacher:
+        raise HTTPException(status_code=404, detail="מורה לא נמצא")
+
+    if req.action == "remove_from_meeting":
+        # Remove teacher from meeting's teacher list
+        current_teachers = [t for t in meeting.teachers if t.id != req.teacher_id]
+        meeting.teachers = current_teachers
+        # Also remove from locked if present
+        if meeting.locked_teacher_ids and req.teacher_id in meeting.locked_teacher_ids:
+            meeting.locked_teacher_ids = [
+                tid for tid in meeting.locked_teacher_ids if tid != req.teacher_id
+            ]
+        db.commit()
+        return {
+            "success": True,
+            "message": f"המורה {teacher.name} הוסר/ה מישיבת \"{meeting.name}\"",
+        }
+
+    elif req.action == "unlock_teacher":
+        # Remove teacher from locked_teacher_ids but keep in meeting
+        if meeting.locked_teacher_ids and req.teacher_id in meeting.locked_teacher_ids:
+            meeting.locked_teacher_ids = [
+                tid for tid in meeting.locked_teacher_ids if tid != req.teacher_id
+            ]
+            db.commit()
+            return {
+                "success": True,
+                "message": f"בוטלה נעילה של {teacher.name} בישיבת \"{meeting.name}\"",
+            }
+        return {"success": True, "message": "המורה לא נעול/ה בישיבה זו"}
+
+    else:
+        raise HTTPException(status_code=400, detail=f"פעולה לא מוכרת: {req.action}")
 
 
 @router.get("/meeting-absences")

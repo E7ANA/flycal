@@ -289,11 +289,7 @@ def validate_data(data: SolverData) -> list[str]:
                 teacher_hours[track.teacher_id] = (
                     teacher_hours.get(track.teacher_id, 0) + track.hours_per_week
                 )
-    for meeting in data.meetings:
-        for t in meeting.teachers:
-            teacher_hours[t.id] = (
-                teacher_hours.get(t.id, 0) + meeting.hours_per_week
-            )
+    # NOTE: meeting hours not counted — meetings use separate x_meeting variables.
     teacher_name_map: dict[int, str] = {}
     for req in data.requirements:
         if req.teacher_id and req.teacher:
@@ -401,7 +397,7 @@ def _check_pinned_conflicts(
                     (day, period, "track", track.id, source)
                 )
 
-    # Collect pinned meetings
+    # Collect pinned meetings (skip excused teachers)
     for meeting in data.meetings:
         pinned = getattr(meeting, "pinned_slots", None)
         if not pinned:
@@ -411,6 +407,12 @@ def _check_pinned_conflicts(
             period = slot.get("period")
             if day and period:
                 for t in meeting.teachers:
+                    # Skip teachers excused from this meeting
+                    excused_pair = _normalize_pair(
+                        "meeting", meeting.id, "teacher_absence", t.id
+                    )
+                    if excused_pair in data.allowed_overlap_pairs:
+                        continue
                     teacher_pinned.setdefault(t.id, []).append(
                         (day, period, "meeting", meeting.id, f"ישיבה '{meeting.name}'")
                     )
@@ -479,18 +481,26 @@ def _diagnose_infeasibility(
 ) -> list[InfeasibilityConflict]:
     """Diagnose why the model is infeasible.
 
-    Strategy:
-    1. Verify system constraints alone are feasible.
-    2. Add user constraints by rule-type group — find which groups break it.
-    3. Drill into problematic groups to find specific constraints.
-    4. Test brain rules on top.
+    Strategy (5 phases):
+    0. Check system constraints alone — if infeasible, provide specific details
+       about which teachers/classes/clusters are over-capacity.
+    1. Test user constraints by rule-type group against system constraints.
+    2. Drill into problematic groups to find specific constraints, with
+       detailed conflict messages explaining WHY.
+    2.5. Test pairs of problematic rule-type groups together to find
+         cross-type combinations that cause infeasibility.
+    3. Test brain rules on top of system + user constraints.
+    4. Fallback: full combination message.
+
     Returns a list of conflicting constraints/rules.
     """
     import logging
     from collections import defaultdict
+    from itertools import combinations
     from app.models.constraint import Constraint
     from app.solver.constraint_compiler import _compile_one, compile_all_constraints
     from app.solver import brain as brain_module
+    from app.solver.model_builder import _normalize_pair
 
     log = logging.getLogger("solver.diagnosis")
 
@@ -510,6 +520,253 @@ def _diagnose_infeasibility(
         add_system_constraints(m, data, v)
         return m, v
 
+    # ── Helper: build name maps ────────────────────────────────────────
+    teacher_name_map: dict[int, str] = {}
+    for req in data.requirements:
+        if req.teacher_id and req.teacher:
+            teacher_name_map[req.teacher_id] = req.teacher.name
+    for cluster in data.clusters:
+        for track in cluster.tracks:
+            if track.teacher_id and track.teacher:
+                teacher_name_map[track.teacher_id] = track.teacher.name
+    for meeting in data.meetings:
+        for t in meeting.teachers:
+            teacher_name_map[t.id] = t.name
+
+    class_name_map: dict[int, str] = {
+        cg.id: cg.name for cg in data.class_groups
+    }
+
+    available_set = set(data.available_slots)
+    slots_per_day: dict[str, set[int]] = defaultdict(set)
+    for day, period in data.available_slots:
+        slots_per_day[day].add(period)
+
+    def _tname(tid: int) -> str:
+        return teacher_name_map.get(tid, f"מורה #{tid}")
+
+    def _cname(cid: int) -> str:
+        return class_name_map.get(cid, f"כיתה #{cid}")
+
+    # ── Helper: compute teacher hours and available slots ──────────────
+    def _teacher_hours_and_availability() -> tuple[
+        dict[int, int],
+        dict[int, int],
+        dict[int, list[str]],  # teacher -> list of assignment descriptions
+    ]:
+        """Return (teacher_total_hours, teacher_available_count, teacher_assignments)."""
+        t_hours: dict[int, int] = defaultdict(int)
+        t_assignments: dict[int, list[str]] = defaultdict(list)
+
+        for req in data.requirements:
+            if req.is_grouped or req.teacher_id is None:
+                continue
+            t_hours[req.teacher_id] += req.hours_per_week
+            subj = req.subject.name if req.subject else f"מקצוע {req.subject_id}"
+            t_assignments[req.teacher_id].append(
+                f"{subj} ל{_cname(req.class_group_id)} ({req.hours_per_week}ש)"
+            )
+
+        for cluster in data.clusters:
+            for track in cluster.tracks:
+                if track.teacher_id is not None:
+                    t_hours[track.teacher_id] += track.hours_per_week
+                    t_assignments[track.teacher_id].append(
+                        f"רצועה '{track.name}' ({track.hours_per_week}ש)"
+                    )
+
+        for meeting in data.meetings:
+            for t in meeting.teachers:
+                t_hours[t.id] += meeting.hours_per_week
+                t_assignments[t.id].append(
+                    f"ישיבה '{meeting.name}' ({meeting.hours_per_week}ש)"
+                )
+
+        t_avail: dict[int, int] = {}
+        for tid in t_hours:
+            blocked = data.teacher_blocked_slots.get(tid, set())
+            t_avail[tid] = len(available_set - blocked)
+
+        return dict(t_hours), t_avail, dict(t_assignments)
+
+    # ── Helper: compute class hours ────────────────────────────────────
+    def _class_hours() -> dict[int, int]:
+        c_hours: dict[int, int] = defaultdict(int)
+        for req in data.requirements:
+            if req.is_grouped or req.teacher_id is None:
+                continue
+            c_hours[req.class_group_id] += req.hours_per_week
+        # Clusters: hours apply to all source classes
+        for cluster in data.clusters:
+            if cluster.tracks:
+                track_hours = max(t.hours_per_week for t in cluster.tracks)
+                for sc in cluster.source_classes:
+                    c_hours[sc.id] += track_hours
+        return dict(c_hours)
+
+    # ── Helper: detailed constraint explanation ────────────────────────
+    def _explain_constraint(c) -> str:
+        """Generate a detailed explanation of WHY a constraint conflicts."""
+        rt = str(c.rule_type)
+        params = c.parameters or {}
+        target_id = c.target_id
+
+        if rt == "BLOCK_DAY":
+            day = params.get("day", "?")
+            day_he = _day_he(day)
+            if target_id and c.category in ("TEACHER",):
+                tname = _tname(target_id)
+                t_hours_map, t_avail_map, _ = _teacher_hours_and_availability()
+                total_h = t_hours_map.get(target_id, 0)
+                blocked_base = data.teacher_blocked_slots.get(target_id, set())
+                # Count how many slots are on that day
+                day_slots = slots_per_day.get(day, set())
+                avail_after = len(available_set - blocked_base) - len(day_slots)
+                return (
+                    f"המורה {tname} חסומה ב{day_he}, אבל יש לה {total_h} שעות "
+                    f"לשבץ ורק {max(avail_after, 0)} סלוטים פנויים אחרי החסימה. "
+                    f"נסו לשנות ל-SOFT או לבטל זמנית."
+                )
+            return (
+                f"חסימת {day_he} סותרת את אילוצי המערכת. "
+                f"נסו לשנות ל-SOFT או לבטל זמנית."
+            )
+
+        if rt == "BLOCK_TIMESLOT":
+            day = params.get("day", "?")
+            period = params.get("period", "?")
+            if target_id and c.category in ("TEACHER",):
+                tname = _tname(target_id)
+                return (
+                    f"חסימת {tname} ב{_day_he(day)} שעה {period} "
+                    f"מצמצמת את הסלוטים הפנויים מתחת לשעות הנדרשות. "
+                    f"נסו לשנות ל-SOFT או לבטל."
+                )
+            return (
+                f"חסימת סלוט {_day_he(day)} שעה {period} סותרת את אילוצי המערכת. "
+                f"נסו לשנות ל-SOFT או לבטל."
+            )
+
+        if rt == "BLOCK_TIME_RANGE":
+            day = params.get("day", "ALL")
+            fp = params.get("from_period", "?")
+            tp = params.get("to_period", "?")
+            day_label = "כל הימים" if day == "ALL" else _day_he(day)
+            if target_id and c.category in ("TEACHER",):
+                tname = _tname(target_id)
+                return (
+                    f"חסימת טווח שעות {fp}-{tp} ב{day_label} עבור {tname} "
+                    f"מצמצמת יותר מדי סלוטים. "
+                    f"נסו לשנות ל-SOFT או לצמצם את הטווח."
+                )
+            return (
+                f"חסימת טווח שעות {fp}-{tp} ב{day_label} סותרת אילוצי מערכת. "
+                f"נסו לשנות ל-SOFT."
+            )
+
+        if rt == "MAX_TEACHING_HOURS_PER_DAY":
+            max_h = params.get("max", "?")
+            if target_id:
+                tname = _tname(target_id)
+                t_hours_map, _, _ = _teacher_hours_and_availability()
+                total_h = t_hours_map.get(target_id, 0)
+                num_days = len(data.days)
+                min_needed = (total_h + int(max_h) - 1) // int(max_h) if int(max_h) > 0 else num_days
+                return (
+                    f"למורה {tname} יש {total_h} שעות, ומקסימום {max_h} ליום "
+                    f"דורש לפחות {min_needed} ימים, אבל אין מספיק ימים/סלוטים פנויים. "
+                    f"נסו להגדיל את המקסימום או לשנות ל-SOFT."
+                )
+            return (
+                f"מגבלת {max_h} שעות הוראה ליום סותרת — לא מספיק ימים. "
+                f"נסו לשנות ל-SOFT."
+            )
+
+        if rt == "MAX_TEACHING_DAYS":
+            max_d = params.get("max_days", "?")
+            if target_id:
+                tname = _tname(target_id)
+                t_hours_map, _, _ = _teacher_hours_and_availability()
+                total_h = t_hours_map.get(target_id, 0)
+                max_per_day = max(len(v) for v in slots_per_day.values()) if slots_per_day else 0
+                return (
+                    f"למורה {tname} יש {total_h} שעות, אבל מוגבל ל-{max_d} ימים "
+                    f"(מקסימום {max_per_day} שעות ביום) — לא מספיק קיבולת. "
+                    f"נסו להגדיל מספר הימים או לשנות ל-SOFT."
+                )
+            return (
+                f"מגבלת {max_d} ימי הוראה סותרת את נפח השעות. "
+                f"נסו לשנות ל-SOFT."
+            )
+
+        if rt == "MIN_FREE_DAYS":
+            min_d = params.get("min_days", "?")
+            if target_id:
+                tname = _tname(target_id)
+                allowed_days = len(data.days) - int(min_d) if isinstance(min_d, int) else "?"
+                t_hours_map, _, _ = _teacher_hours_and_availability()
+                total_h = t_hours_map.get(target_id, 0)
+                return (
+                    f"למורה {tname} יש {total_h} שעות, אבל {min_d} ימים חופשיים "
+                    f"מותירים רק {allowed_days} ימי עבודה — לא מספיק. "
+                    f"נסו להפחית ימים חופשיים או לשנות ל-SOFT."
+                )
+            return f"דרישה ל-{min_d} ימים חופשיים סותרת. נסו לשנות ל-SOFT."
+
+        if rt in ("MAX_PER_DAY", "MIN_DAYS_SPREAD", "REQUIRE_CONSECUTIVE_PERIODS"):
+            subj_name = ""
+            if target_id:
+                for s in data.all_subjects:
+                    if s.id == target_id:
+                        subj_name = s.name
+                        break
+            if rt == "MAX_PER_DAY":
+                max_v = params.get("max", "?")
+                return (
+                    f"מגבלת {max_v} שעות ליום עבור מקצוע '{subj_name or target_id}' "
+                    f"סותרת — לא מספיק ימים לפזר את כל השעות הנדרשות. "
+                    f"נסו להגדיל את המקסימום או לשנות ל-SOFT."
+                )
+            if rt == "MIN_DAYS_SPREAD":
+                min_d = params.get("min_days", "?")
+                return (
+                    f"פיזור מינימלי ל-{min_d} ימים עבור '{subj_name or target_id}' "
+                    f"סותר — אין מספיק ימים פנויים. נסו לשנות ל-SOFT."
+                )
+            if rt == "REQUIRE_CONSECUTIVE_PERIODS":
+                cnt = params.get("consecutive_count", 2)
+                return (
+                    f"דרישת {cnt} שעות רצופות עבור '{subj_name or target_id}' "
+                    f"סותרת — אין מספיק סלוטים רצופים. נסו לשנות ל-SOFT."
+                )
+
+        if rt == "NO_GAPS":
+            entity = ""
+            if c.category == "TEACHER" and target_id:
+                entity = f"מורה {_tname(target_id)}"
+            elif c.category == "CLASS" and target_id:
+                entity = f"כיתה {_cname(target_id)}"
+            return (
+                f"איסור חלונות עבור {entity or 'היעד'} סותר את שאר האילוצים — "
+                f"לא ניתן לשבץ ללא חלונות. נסו לשנות ל-SOFT."
+            )
+
+        if rt == "CLASS_DAY_LENGTH_LIMIT":
+            max_p = params.get("max_periods", "?")
+            day = params.get("day", "ALL")
+            day_label = "כל הימים" if day == "ALL" else _day_he(day)
+            return (
+                f"מגבלת {max_p} שעות ב{day_label} לכיתות סותרת — "
+                f"לא מספיק סלוטים לשבץ את כל השעות הנדרשות. "
+                f"נסו להגדיל את המגבלה או לשנות ל-SOFT."
+            )
+
+        # Generic fallback
+        return (
+            f"האילוץ '{c.name}' (סוג {rt}) סותר את אילוצי המערכת. "
+            f"נסו לשנות ל-SOFT או לבטל זמנית."
+        )
+
     conflicts: list[InfeasibilityConflict] = []
 
     if job_id:
@@ -520,12 +777,163 @@ def _diagnose_infeasibility(
     log.info("Diagnosis: testing system constraints alone")
     m0, _ = _build_base()
     if _quick_solve(m0) == cp_model.INFEASIBLE:
-        conflicts.append(InfeasibilityConflict(
-            source="system",
-            name="אילוצי מערכת בסיסיים",
-            details="אילוצי המערכת הבסיסיים (חפיפת מורים, כיתות, שעות) סותרים — "
-                    "ייתכן שהנתונים מכילים שגיאה מבנית",
-        ))
+        log.info("Diagnosis: system constraints INFEASIBLE — analyzing specifics")
+
+        # Analyze specific causes of system infeasibility
+        t_hours_map, t_avail_map, t_assignments = _teacher_hours_and_availability()
+        c_hours_map = _class_hours()
+        total_available = len(available_set)
+
+        found_specific = False
+
+        # Check 1: Teacher capacity (hours > available slots)
+        for tid in sorted(t_hours_map, key=lambda x: t_hours_map[x] - t_avail_map.get(x, 0), reverse=True):
+            hours = t_hours_map[tid]
+            avail = t_avail_map.get(tid, 0)
+            if hours > avail:
+                tname = _tname(tid)
+                blocked_count = len(data.teacher_blocked_slots.get(tid, set()))
+                assignments_str = "; ".join(t_assignments.get(tid, [])[:5])
+                if len(t_assignments.get(tid, [])) > 5:
+                    assignments_str += f" (+{len(t_assignments[tid]) - 5} נוספים)"
+                conflicts.append(InfeasibilityConflict(
+                    source="system",
+                    name=f"עומס יתר: {tname}",
+                    details=(
+                        f"למורה {tname} יש {hours} שעות נדרשות "
+                        f"אבל רק {avail} סלוטים פנויים "
+                        f"(מתוך {total_available} סלוטים, {blocked_count} חסומים). "
+                        f"שיבוצים: {assignments_str}"
+                    ),
+                ))
+                found_specific = True
+
+        # Check 2: Class capacity (hours > available slots)
+        for cid, hours in c_hours_map.items():
+            if hours > total_available:
+                conflicts.append(InfeasibilityConflict(
+                    source="system",
+                    name=f"עומס יתר: כיתה {_cname(cid)}",
+                    details=(
+                        f"לכיתה {_cname(cid)} יש {hours} שעות נדרשות "
+                        f"אבל רק {total_available} סלוטים זמינים בשבוע."
+                    ),
+                ))
+                found_specific = True
+
+        # Check 3: Grouping clusters — overlapping teacher availability
+        for cluster in data.clusters:
+            primary_tracks = [t for t in cluster.tracks if not getattr(t, "is_secondary", False)]
+            if len(primary_tracks) < 2:
+                continue
+
+            # All tracks must be synced — check if teachers have enough common free slots
+            teacher_ids = [t.teacher_id for t in primary_tracks if t.teacher_id is not None]
+            if len(teacher_ids) < 2:
+                continue
+
+            # Find overlap of available slots for all teachers in the cluster
+            common_slots = set(data.available_slots)
+            for tid in teacher_ids:
+                blocked = data.teacher_blocked_slots.get(tid, set())
+                common_slots -= blocked
+
+            needed_hours = primary_tracks[0].hours_per_week if primary_tracks else 0
+            if needed_hours > len(common_slots):
+                teacher_names = ", ".join(_tname(tid) for tid in teacher_ids)
+                blocked_details = []
+                for tid in teacher_ids:
+                    b_count = len(data.teacher_blocked_slots.get(tid, set()))
+                    if b_count > 0:
+                        blocked_details.append(f"{_tname(tid)}: {b_count} חסימות")
+                blocked_str = "; ".join(blocked_details) if blocked_details else "ללא חסימות"
+                conflicts.append(InfeasibilityConflict(
+                    source="system",
+                    name=f"הקבצה '{cluster.name}' — אין חפיפה מספקת",
+                    details=(
+                        f"אשכול '{cluster.name}' צריך {needed_hours} שעות מסונכרנות "
+                        f"אבל למורים ({teacher_names}) יש רק {len(common_slots)} "
+                        f"סלוטים פנויים משותפים. חסימות: {blocked_str}"
+                    ),
+                ))
+                found_specific = True
+
+        # Check 4: Meetings conflicting with teaching capacity
+        for meeting in data.meetings:
+            if not meeting.teachers:
+                continue
+            for t in meeting.teachers:
+                tid = t.id
+                blocked = data.teacher_blocked_slots.get(tid, set())
+                t_avail_count = len(available_set - blocked)
+                t_total = t_hours_map.get(tid, 0)
+                # Meeting hours are already in t_total — check if tight
+                if t_total > t_avail_count:
+                    # Check if removing the meeting would fix it
+                    non_meeting_hours = t_total - meeting.hours_per_week
+                    if non_meeting_hours <= t_avail_count:
+                        conflicts.append(InfeasibilityConflict(
+                            source="system",
+                            name=f"ישיבה '{meeting.name}' — עומס על {_tname(tid)}",
+                            details=(
+                                f"ישיבה '{meeting.name}' ({meeting.hours_per_week}ש) "
+                                f"גורמת לעומס יתר על {_tname(tid)} — "
+                                f"{t_total} שעות כוללות אבל רק {t_avail_count} סלוטים פנויים. "
+                                f"ללא הישיבה יש {non_meeting_hours} שעות שיכולות להיכנס."
+                            ),
+                        ))
+                        found_specific = True
+
+        # Check 5: Meeting + grouping teacher conflicts
+        # meeting_teacher_slots[teacher_id] = [(meeting_id, meeting_name, day, period), ...]
+        meeting_teacher_slots: dict[int, list[tuple[int, str, str, int]]] = defaultdict(list)
+        for meeting in data.meetings:
+            pinned = getattr(meeting, "pinned_slots", None)
+            if pinned:
+                for t in meeting.teachers:
+                    for slot in pinned:
+                        day = slot.get("day")
+                        period = slot.get("period")
+                        if day and period:
+                            meeting_teacher_slots[t.id].append((meeting.id, meeting.name, day, period))
+
+        for cluster in data.clusters:
+            for track in cluster.tracks:
+                if track.teacher_id is None:
+                    continue
+                tid = track.teacher_id
+                if tid not in meeting_teacher_slots:
+                    continue
+                track_pinned = getattr(track, "pinned_slots", None) or []
+                for m_id, m_name, m_day, m_period in meeting_teacher_slots[tid]:
+                    # Skip if this overlap was approved
+                    pair = _normalize_pair("meeting", m_id, "track", track.id)
+                    if pair in data.allowed_overlap_pairs:
+                        continue
+                    for tslot in track_pinned:
+                        if tslot.get("day") == m_day and tslot.get("period") == m_period:
+                            conflicts.append(InfeasibilityConflict(
+                                source="system",
+                                name=f"ישיבה '{m_name}' חופפת הקבצה '{cluster.name}'",
+                                details=(
+                                    f"ישיבת '{m_name}' ב{_day_he(m_day)} שעה {m_period} "
+                                    f"חופפת עם הקבצה '{cluster.name}' שמחייבת "
+                                    f"את {_tname(tid)} באותו זמן."
+                                ),
+                            ))
+                            found_specific = True
+
+        if not found_specific:
+            conflicts.append(InfeasibilityConflict(
+                source="system",
+                name="אילוצי מערכת בסיסיים",
+                details=(
+                    "אילוצי המערכת הבסיסיים (חפיפת מורים, כיתות, שעות, הקבצות) "
+                    "סותרים — ייתכן שהנתונים מכילים שגיאה מבנית. "
+                    "בדקו שכמות השעות, חסימות מורים, והקבצות עקביים."
+                ),
+            ))
+
         return conflicts
 
     # ── Phase 1: User constraints — test by rule-type group ────────────
@@ -559,28 +967,27 @@ def _diagnose_infeasibility(
                 name=c.name,
                 constraint_id=c.id,
                 rule_type=rule_type,
-                details=f"האילוץ '{c.name}' סותר את אילוצי המערכת הבסיסיים. "
-                        f"נסו לשנות אותו ל-SOFT או לבטלו זמנית.",
+                details=_explain_constraint(c),
             ))
         else:
             # Test each constraint in the group individually
+            individual_culprits: list = []
             for c in group:
                 m, v = _build_base()
                 _compile_one(m, data, v, c)
                 status = _quick_solve(m)
                 if status == cp_model.INFEASIBLE:
+                    individual_culprits.append(c)
                     conflicts.append(InfeasibilityConflict(
                         source="user_constraint",
                         name=c.name,
                         constraint_id=c.id,
                         rule_type=rule_type,
-                        details=f"האילוץ '{c.name}' סותר את אילוצי המערכת לבד. "
-                                f"נסו לשנות אותו ל-SOFT או לבטלו זמנית.",
+                        details=_explain_constraint(c),
                     ))
 
             # If no individual constraint caused INFEASIBLE, it's a combination
-            if not any(c.rule_type == rule_type for c in conflicts
-                       if hasattr(c, 'rule_type')):
+            if not individual_culprits:
                 names = ", ".join(c.name for c in group[:5])
                 if len(group) > 5:
                     names += f" (+{len(group) - 5} נוספים)"
@@ -589,8 +996,59 @@ def _diagnose_infeasibility(
                     name=f"שילוב אילוצים מסוג {rule_type}",
                     rule_type=rule_type,
                     details=f"השילוב של {len(group)} אילוצים מסוג זה יחד סותר "
-                            f"את אילוצי המערכת: {names}",
+                            f"את אילוצי המערכת: {names}. "
+                            f"נסו לבטל חלק מהם או לשנות ל-SOFT.",
                 ))
+
+    # ── Phase 2.5: Cross rule-type combinations ────────────────────────
+    # If Phase 2 found nothing, test pairs of rule-type groups that each
+    # passed alone but might conflict together.
+    if not conflicts and len(by_rule) >= 2:
+        log.info("Diagnosis: testing cross rule-type pairs")
+        # Only test pairs involving rule types that are "suspicious" —
+        # time blocks, load limits, gap rules, and grouping rules are
+        # most likely to interact.
+        suspicious_prefixes = {
+            "BLOCK_", "MAX_", "MIN_", "NO_GAPS", "REQUIRE_",
+            "CLASS_DAY_", "SYNC_",
+        }
+        candidate_types = [
+            rt for rt in by_rule
+            if any(rt.startswith(p) or rt == p for p in suspicious_prefixes)
+        ]
+        # Also include any rule type not already found problematic
+        all_rule_types = [rt for rt in by_rule if rt not in problematic_groups]
+
+        # Prioritize suspicious types, but test all if needed
+        test_types = candidate_types if candidate_types else all_rule_types
+        cross_conflicts_found = False
+
+        for rt1, rt2 in combinations(test_types, 2):
+            m, v = _build_base()
+            for c in by_rule[rt1]:
+                _compile_one(m, data, v, c)
+            for c in by_rule[rt2]:
+                _compile_one(m, data, v, c)
+            status = _quick_solve(m)
+            if status == cp_model.INFEASIBLE:
+                names1 = ", ".join(c.name for c in by_rule[rt1][:3])
+                names2 = ", ".join(c.name for c in by_rule[rt2][:3])
+                conflicts.append(InfeasibilityConflict(
+                    source="user_constraint",
+                    name=f"שילוב בין {rt1} ו-{rt2}",
+                    rule_type=f"{rt1}+{rt2}",
+                    details=(
+                        f"שילוב אילוצים מסוג {rt1} ({names1}) "
+                        f"עם אילוצים מסוג {rt2} ({names2}) "
+                        f"גורם לסתירה. כל קבוצה לחוד עוברת, אבל ביחד אין פתרון. "
+                        f"נסו לשנות חלק מהם ל-SOFT."
+                    ),
+                ))
+                cross_conflicts_found = True
+                log.info(f"Diagnosis: cross-type pair {rt1}+{rt2} -> INFEASIBLE")
+
+        if not cross_conflicts_found:
+            log.info("Diagnosis: no cross-type pair found infeasible")
 
     # ── Phase 3: Test brain rules ──────────────────────────────────────
     # Build model with system + all user constraints (to test brain on top)
@@ -629,11 +1087,35 @@ def _diagnose_infeasibility(
 
                 status = _quick_solve(m)
                 if status == cp_model.INFEASIBLE:
+                    # Build detailed message for brain conflicts
+                    extra_detail = ""
+                    if func_name == "max_days_by_frontal":
+                        teacher_frontal = brain_module._compute_teacher_frontal(data)
+                        for tid, frontal in sorted(teacher_frontal.items(), key=lambda x: -x[1]):
+                            # Max days formula: roughly frontal/6 rounded up, capped
+                            # Show teachers that are tight
+                            if frontal > 0:
+                                extra_detail += f"\n  - {_tname(tid)}: {frontal} שעות פרונטליות"
+                        if extra_detail:
+                            extra_detail = "\nמורים עם שעות פרונטליות:" + extra_detail
+                    elif func_name == "oz_la_tmura":
+                        extra_detail = (
+                            "\nכלל זה מגביל חלונות (שעות ריקות) ליום לפי נפח שעות פרונטליות. "
+                            "ייתכן שלמורים מסוימים אין מספיק גמישות ביום."
+                        )
+                    elif func_name == "max_consecutive_frontal":
+                        extra_detail = (
+                            "\nכלל זה מגביל ל-6 שעות פרונטליות רצופות. "
+                            "ייתכן שאין מספיק הפסקות/ישיבות לפצל את הבלוקים."
+                        )
+
                     conflicts.append(InfeasibilityConflict(
                         source="brain_rule",
                         name=display_name,
-                        details=f"כלל המוח '{display_name}' בשילוב עם שאר האילוצים "
-                                f"הופך את הבעיה לבלתי פתירה.",
+                        details=(
+                            f"כלל המוח '{display_name}' בשילוב עם שאר האילוצים "
+                            f"הופך את הבעיה לבלתי פתירה.{extra_detail}"
+                        ),
                     ))
 
     # ── Phase 4: If still nothing found, test full combination ─────────
@@ -641,13 +1123,196 @@ def _diagnose_infeasibility(
         conflicts.append(InfeasibilityConflict(
             source="combination",
             name="שילוב אילוצים",
-            details="לא נמצא אילוץ בודד שגורם לבעיה — השילוב של כל האילוצים "
+            details="לא נמצא אילוץ בודד או זוג שגורם לבעיה — השילוב של כל האילוצים "
                     "יחד הופך את הבעיה לבלתי פתירה. נסו להגדיל את זמן הפתרון, "
                     "או לבטל זמנית חלק מהאילוצים.",
         ))
 
     log.info(f"Diagnosis complete: {len(conflicts)} conflicts found")
     return conflicts
+
+
+def _apply_warm_start(
+    model: cp_model.CpModel,
+    variables: SolverVariables,
+    data: SolverData,
+    db: Session,
+    baseline_solution_id: int,
+    edit_constraints: list[dict],
+    deviation_weight: int,
+) -> None:
+    """Load baseline solution, add hints + deviation penalties + edit constraints."""
+    from app.models.timetable import ScheduledLesson, ScheduledMeeting
+
+    # --- Load baseline assignments ---
+    baseline_lessons = (
+        db.query(ScheduledLesson)
+        .filter(ScheduledLesson.solution_id == baseline_solution_id)
+        .all()
+    )
+    baseline_meetings = (
+        db.query(ScheduledMeeting)
+        .filter(ScheduledMeeting.solution_id == baseline_solution_id)
+        .all()
+    )
+
+    # Build sets of active keys from baseline
+    baseline_x: set[tuple[int, int, int, str, int]] = set()
+    for l in baseline_lessons:
+        if l.track_id is not None:
+            continue  # track lessons handled via x_track
+        key = (l.class_group_id, l.subject_id, l.teacher_id, l.day, l.period)
+        baseline_x.add(key)
+
+    baseline_track: set[tuple[int, str, int]] = set()
+    for l in baseline_lessons:
+        if l.track_id is not None:
+            key = (l.track_id, l.day, l.period)
+            baseline_track.add(key)
+
+    baseline_meeting: set[tuple[int, str, int]] = set()
+    for m in baseline_meetings:
+        key = (m.meeting_id, m.day, m.period)
+        baseline_meeting.add(key)
+
+    # --- Compute forced-edit keys (excluded from deviation penalties) ---
+    forced_keys: set[str] = set()
+    for edit in edit_constraints:
+        edit_type = edit.get("type", "")
+        params = edit.get("params", {})
+
+        if edit_type == "PIN_LESSON":
+            # Pin specific (class, subject, teacher) to (day, period)
+            key = (params["class_id"], params["subject_id"],
+                   params["teacher_id"], params["day"], params["period"])
+            if key in variables.x:
+                model.add(variables.x[key] == 1)
+                forced_keys.add(f"x_{key}")
+
+        elif edit_type == "BLOCK_TEACHER_SLOT":
+            teacher_id = params["teacher_id"]
+            day = params["day"]
+            period = params["period"]
+            for k, var in variables.x.items():
+                if k[2] == teacher_id and k[3] == day and k[4] == period:
+                    model.add(var == 0)
+                    forced_keys.add(f"x_{k}")
+            for k, var in variables.x_track.items():
+                # Need to check track teacher
+                pass  # track teacher checked via data
+            for k, var in variables.x_meeting.items():
+                if k[1] == day and k[2] == period:
+                    forced_keys.add(f"mt_{k}")
+
+        elif edit_type == "PIN_TEACHER_DAY_CONSECUTIVE":
+            teacher_id = params["teacher_id"]
+            day = params["day"]
+            consecutive_count = params.get("consecutive_count", 2)
+            _add_teacher_day_consecutive_edit(
+                model, variables, data, teacher_id, day, consecutive_count,
+            )
+            # Mark all teacher slots on that day as forced
+            for k in variables.x:
+                if k[2] == teacher_id and k[3] == day:
+                    forced_keys.add(f"x_{k}")
+
+    # --- Add hints for ALL variables (warm-start seeding) ---
+    for key, var in variables.x.items():
+        model.add_hint(var, 1 if key in baseline_x else 0)
+    for key, var in variables.x_track.items():
+        model.add_hint(var, 1 if key in baseline_track else 0)
+    for key, var in variables.x_meeting.items():
+        model.add_hint(var, 1 if key in baseline_meeting else 0)
+
+    # --- Add deviation penalties (only for baseline=1 variables, skip forced) ---
+    DEVIATION_CID = -999  # Special pseudo-constraint ID for deviation tracking
+
+    for key, var in variables.x.items():
+        if f"x_{key}" in forced_keys:
+            continue
+        if key in baseline_x:
+            # Penalize removing an existing lesson
+            dev = model.new_bool_var(f"dev_x_{key}")
+            model.add(dev >= 1 - var)
+            variables.penalties.append((dev, deviation_weight, DEVIATION_CID))
+
+    for key, var in variables.x_track.items():
+        if f"tr_{key}" in forced_keys:
+            continue
+        if key in baseline_track:
+            dev = model.new_bool_var(f"dev_tr_{key}")
+            model.add(dev >= 1 - var)
+            variables.penalties.append((dev, deviation_weight, DEVIATION_CID))
+
+    for key, var in variables.x_meeting.items():
+        if f"mt_{key}" in forced_keys:
+            continue
+        if key in baseline_meeting:
+            dev = model.new_bool_var(f"dev_mt_{key}")
+            model.add(dev >= 1 - var)
+            variables.penalties.append((dev, deviation_weight, DEVIATION_CID))
+
+
+def _add_teacher_day_consecutive_edit(
+    model: cp_model.CpModel,
+    variables: SolverVariables,
+    data: SolverData,
+    teacher_id: int,
+    day: str,
+    consecutive_count: int,
+) -> None:
+    """Add hard constraint: teacher must have at least `consecutive_count` consecutive
+    teaching hours on the given day."""
+    # Collect all lesson variables for this teacher on this day, sorted by period
+    period_vars: dict[int, list] = {}
+    for key, var in variables.x.items():
+        c, s, t, d, p = key
+        if t == teacher_id and d == day:
+            period_vars.setdefault(p, []).append(var)
+    for key, var in variables.x_track.items():
+        tk_id, d, p = key
+        if d != day:
+            continue
+        # Check if this track belongs to the teacher
+        for cluster in data.clusters:
+            for track in cluster.tracks:
+                if track.id == tk_id and track.teacher_id == teacher_id:
+                    period_vars.setdefault(p, []).append(var)
+
+    if not period_vars:
+        return
+
+    periods = sorted(period_vars.keys())
+
+    # For each period, create a bool: teacher_teaches[p] = 1 iff any lesson at p
+    teaches: dict[int, cp_model.IntVar] = {}
+    for p in periods:
+        t_var = model.new_bool_var(f"edit_teaches_t{teacher_id}_{day}_p{p}")
+        model.add_max_equality(t_var, period_vars[p])
+        teaches[p] = t_var
+
+    # Require at least one block of consecutive_count consecutive teaching periods
+    block_starts: list[cp_model.IntVar] = []
+    for i in range(len(periods) - consecutive_count + 1):
+        # Check if periods[i:i+consecutive_count] are actually consecutive integers
+        is_contiguous = all(
+            periods[i + j + 1] == periods[i + j] + 1
+            for j in range(consecutive_count - 1)
+        )
+        if not is_contiguous:
+            continue
+
+        block_var = model.new_bool_var(
+            f"edit_block_t{teacher_id}_{day}_start_p{periods[i]}"
+        )
+        # If block chosen, all periods in the block must have teaching
+        for j in range(consecutive_count):
+            model.add(teaches[periods[i + j]] == 1).only_enforce_if(block_var)
+        block_starts.append(block_var)
+
+    if block_starts:
+        # At least one consecutive block must exist
+        model.add(sum(block_starts) >= 1)
 
 
 def solve(
@@ -657,8 +1322,16 @@ def solve(
     max_solutions: int | None = None,
     num_workers: int | None = None,
     job_id: str | None = None,
+    baseline_solution_id: int | None = None,
+    edit_constraints: list[dict] | None = None,
+    deviation_weight: int = 10,
 ) -> SolveResult:
-    """Run the full solve pipeline."""
+    """Run the full solve pipeline.
+
+    When baseline_solution_id is provided, the solver uses warm-start hints
+    from the existing solution and adds deviation penalties to minimize changes.
+    edit_constraints are temporary hard constraints applied on top (e.g. pin lesson, block slot).
+    """
     start_time = time.time()
     _effective_max_time = max_time or settings.solver_max_time
 
@@ -698,6 +1371,14 @@ def solve(
     _step(5, "user_constraints")
     compile_all_constraints(model, data, variables, db, school_id)
     apply_brain_constraints(model, data, variables)
+
+    # Step 5.5: Warm-start from baseline + apply edit constraints
+    if baseline_solution_id is not None:
+        _step(5, "warm_start")
+        _apply_warm_start(
+            model, variables, data, db, baseline_solution_id,
+            edit_constraints or [], deviation_weight,
+        )
 
     # Step 6: Set objective
     _step(6, "setting_objective")

@@ -92,12 +92,8 @@ def _check_teacher_insufficient_slots(
                     teacher_hours.get(track.teacher_id, 0) + track.hours_per_week
                 )
 
-    # Add meeting hours
-    for meeting in data.meetings:
-        for t in meeting.teachers:
-            teacher_hours[t.id] = (
-                teacher_hours.get(t.id, 0) + meeting.hours_per_week
-            )
+    # NOTE: meeting hours are NOT counted here — meetings are scheduled
+    # via separate x_meeting variables and don't compete for teaching slots.
 
     # Calculate blocked slots per teacher (start with teacher-level blocked_slots)
     for teacher_id, hours in teacher_hours.items():
@@ -137,7 +133,10 @@ def _check_teacher_insufficient_slots(
                         blocked_slots.add((d, p))
                 related_ids.append(c.id)
 
-        available = len(data.available_slots) - len(blocked_slots)
+        # Use set subtraction (not arithmetic) — blocked_slots may contain
+        # phantom slots (periods that don't exist in the school timetable).
+        available_set = set(data.available_slots)
+        available = len(available_set - blocked_slots)
         if hours > available:
             issues.append(ConflictIssue(
                 level="error",

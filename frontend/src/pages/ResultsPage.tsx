@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Trash2, BarChart3, Eye, Download, AlertTriangle } from "lucide-react";
 import toast from "react-hot-toast";
@@ -9,6 +10,7 @@ import {
   fetchScoreBreakdown,
   fetchLessonsByClass,
   fetchLessonsByTeacher,
+  fetchLessonsBySubject,
   fetchScheduledMeetings,
   fetchTeacherPresence,
   fetchMeetingAbsences,
@@ -32,13 +34,15 @@ export default function ResultsPage() {
   const schoolId = useSchoolStore((s) => s.activeSchoolId);
   const qc = useQueryClient();
   const { data: school } = useActiveSchool();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [selectedSolutionId, setSelectedSolutionId] = useState<number | null>(
     null,
   );
-  const [viewMode, setViewMode] = useState<"class" | "teacher">("class");
+  const [viewMode, setViewMode] = useState<"class" | "teacher" | "subject" | "meetings">("class");
   const [viewTargetId, setViewTargetId] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Solution | null>(null);
+  const [deepLinkApplied, setDeepLinkApplied] = useState(false);
 
   const { data: solutions = [] } = useQuery({
     queryKey: ["solutions", schoolId],
@@ -80,8 +84,10 @@ export default function ResultsPage() {
     queryFn: () =>
       viewMode === "class"
         ? fetchLessonsByClass(selectedSolutionId!, viewTargetId!)
-        : fetchLessonsByTeacher(selectedSolutionId!, viewTargetId!),
-    enabled: selectedSolutionId !== null && viewTargetId !== null,
+        : viewMode === "subject"
+          ? fetchLessonsBySubject(selectedSolutionId!, viewTargetId!)
+          : fetchLessonsByTeacher(selectedSolutionId!, viewTargetId!),
+    enabled: selectedSolutionId !== null && viewTargetId !== null && viewMode !== "meetings",
   });
 
   const { data: allScheduledMeetings = [] } = useQuery({
@@ -116,6 +122,22 @@ export default function ResultsPage() {
     queryFn: () => fetchGroupingClusters(schoolId!),
     enabled: !!schoolId,
   });
+
+  // Deep link from entity pages: ?view=teacher&id=123
+  useEffect(() => {
+    if (deepLinkApplied || solutions.length === 0) return;
+    const view = searchParams.get("view") as "class" | "teacher" | "subject" | "meetings" | null;
+    const id = searchParams.get("id");
+    if (view) {
+      setViewMode(view);
+      if (id) setViewTargetId(Number(id));
+      // Auto-select latest solution
+      setSelectedSolutionId(solutions[0].id);
+      setDeepLinkApplied(true);
+      // Clear params from URL
+      setSearchParams({}, { replace: true });
+    }
+  }, [solutions, searchParams, deepLinkApplied, setSearchParams]);
 
   const deleteMut = useMutation({
     mutationFn: () => deleteSolution(deleteTarget!.id),
@@ -166,15 +188,14 @@ export default function ResultsPage() {
       ? allScheduledMeetings.filter((sm) => {
           const meeting = meetings.find((m) => m.id === sm.meeting_id);
           if (!meeting?.teacher_ids.includes(viewTargetId)) return false;
-          // Exclude if teacher is absent from this meeting
           const isAbsent = meetingAbsences.some(
             (a) => a.meeting_id === sm.meeting_id && a.teacher_id === viewTargetId,
           );
           return !isAbsent;
         })
-      : viewMode === "class"
-        ? [] // Meetings are teacher-level, not shown in class view
-        : allScheduledMeetings;
+      : viewMode === "meetings"
+        ? allScheduledMeetings
+        : []; // class and subject views don't show meetings
 
   const days = DAYS_ORDER.slice(
     0,
@@ -216,6 +237,8 @@ export default function ResultsPage() {
                 setViewTargetId(classes[0].id);
               } else if (viewMode === "teacher" && teachers.length > 0) {
                 setViewTargetId(teachers[0].id);
+              } else if (viewMode === "subject" && subjects.length > 0) {
+                setViewTargetId(subjects[0].id);
               }
             }}
           >
@@ -384,15 +407,19 @@ export default function ResultsPage() {
             <CardContent className="space-y-4">
               <div className="flex gap-3">
                 <Select
-                  className="w-32"
+                  className="w-40"
                   value={viewMode}
                   onChange={(e) => {
-                    const mode = e.target.value as "class" | "teacher";
+                    const mode = e.target.value as "class" | "teacher" | "subject" | "meetings";
                     setViewMode(mode);
                     if (mode === "class" && classes.length > 0) {
                       setViewTargetId(classes[0].id);
                     } else if (mode === "teacher" && teachers.length > 0) {
                       setViewTargetId(teachers[0].id);
+                    } else if (mode === "subject" && subjects.length > 0) {
+                      setViewTargetId(subjects[0].id);
+                    } else if (mode === "meetings") {
+                      setViewTargetId(null);
                     } else {
                       setViewTargetId(null);
                     }
@@ -400,29 +427,66 @@ export default function ResultsPage() {
                 >
                   <option value="class">לפי כיתה</option>
                   <option value="teacher">לפי מורה</option>
+                  <option value="subject">לפי מקצוע</option>
+                  <option value="meetings">מערכת ישיבות</option>
                 </Select>
 
-                <Select
-                  className="flex-1"
-                  value={viewTargetId ?? ""}
-                  onChange={(e) =>
-                    setViewTargetId(
-                      e.target.value ? Number(e.target.value) : null,
-                    )
-                  }
-                >
-                  <option value="">
-                    בחר {viewMode === "class" ? "כיתה" : "מורה"}
-                  </option>
-                  {(viewMode === "class" ? classes : teachers).map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
+                {viewMode !== "meetings" && (
+                  <Select
+                    className="flex-1"
+                    value={viewTargetId ?? ""}
+                    onChange={(e) =>
+                      setViewTargetId(
+                        e.target.value ? Number(e.target.value) : null,
+                      )
+                    }
+                  >
+                    <option value="">
+                      בחר{" "}
+                      {viewMode === "class"
+                        ? "כיתה"
+                        : viewMode === "teacher"
+                          ? "מורה"
+                          : "מקצוע"}
                     </option>
-                  ))}
-                </Select>
+                    {(viewMode === "class"
+                      ? classes
+                      : viewMode === "teacher"
+                        ? teachers
+                        : subjects
+                    ).map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </Select>
+                )}
               </div>
 
-              {viewTargetId &&
+              {/* Meetings view — no target needed */}
+              {viewMode === "meetings" && allScheduledMeetings.length > 0 && (
+                <TimetableGrid
+                  lessons={[]}
+                  days={days}
+                  maxPeriod={maxPeriod}
+                  subjectMap={subjectMap}
+                  teacherMap={teacherMap}
+                  classMap={classMap}
+                  trackMap={trackMap}
+                  showTeacher={false}
+                  showClass={false}
+                  meetings={allScheduledMeetings}
+                  meetingMap={meetingMap}
+                />
+              )}
+              {viewMode === "meetings" && allScheduledMeetings.length === 0 && (
+                <p className="text-center text-muted-foreground py-8">
+                  אין ישיבות מתוזמנות בפתרון זה
+                </p>
+              )}
+
+              {/* Class / Teacher / Subject views */}
+              {viewMode !== "meetings" && viewTargetId &&
                 (viewLessons.length > 0 || filteredMeetings.length > 0) && (
                   <>
                     {viewMode === "teacher" && teacherPresence && (
@@ -461,8 +525,8 @@ export default function ResultsPage() {
                       teacherMap={teacherMap}
                       classMap={classMap}
                       trackMap={trackMap}
-                      showTeacher={viewMode === "class"}
-                      showClass={viewMode === "teacher"}
+                      showTeacher={viewMode === "class" || viewMode === "subject"}
+                      showClass={viewMode === "teacher" || viewMode === "subject"}
                       meetings={filteredMeetings}
                       meetingMap={meetingMap}
                       meetingAbsences={meetingAbsences}
@@ -485,7 +549,7 @@ export default function ResultsPage() {
                   </>
                 )}
 
-              {viewTargetId &&
+              {viewMode !== "meetings" && viewTargetId &&
                 viewLessons.length === 0 &&
                 filteredMeetings.length === 0 && (
                 <p className="text-center text-muted-foreground py-8">

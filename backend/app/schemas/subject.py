@@ -9,6 +9,7 @@ class SubjectCreate(BaseModel):
     morning_priority: int | None = None
     always_double: bool = False
     blocked_slots: list[dict] | None = None
+    limit_last_periods: bool = False
 
 
 class SubjectUpdate(BaseModel):
@@ -18,6 +19,7 @@ class SubjectUpdate(BaseModel):
     morning_priority: int | None = None
     always_double: bool | None = None
     blocked_slots: list[dict] | None = None
+    limit_last_periods: bool | None = None
 
 
 class SubjectRead(BaseModel):
@@ -29,6 +31,7 @@ class SubjectRead(BaseModel):
     morning_priority: int | None = None
     always_double: bool
     blocked_slots: list[dict] | None = None
+    limit_last_periods: bool = False
 
     model_config = {"from_attributes": True}
 

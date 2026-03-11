@@ -35,6 +35,10 @@ class SolverData:
     homeroom_map: dict[int, int] = field(default_factory=dict)
     # teacher_id -> min_free_days (from MIN_FREE_DAYS constraints)
     min_free_days_map: dict[int, int] = field(default_factory=dict)
+    # teacher_id -> rubrica (general) hours
+    teacher_rubrica_map: dict[int, float] = field(default_factory=dict)
+    # teacher_id -> manual override for max work days
+    teacher_max_work_days: dict[int, int] = field(default_factory=dict)
     # Specific overlap pairs: set of ((type1, id1), (type2, id2)) — normalized
     allowed_overlap_pairs: set[tuple[tuple[str, int], tuple[str, int]]] = field(
         default_factory=set
@@ -149,6 +153,8 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
             all_teacher_ids.add(t.id)
 
     homeroom_map: dict[int, int] = {}
+    teacher_rubrica_map: dict[int, float] = {}
+    teacher_max_work_days: dict[int, int] = {}
     if all_teacher_ids:
         teachers_with_blocks = (
             db.query(Teacher)
@@ -162,6 +168,10 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
                 }
             if t.homeroom_class_id is not None:
                 homeroom_map[t.id] = t.homeroom_class_id
+            if t.rubrica_hours is not None:
+                teacher_rubrica_map[t.id] = t.rubrica_hours
+            if t.max_work_days is not None:
+                teacher_max_work_days[t.id] = t.max_work_days
 
     # Load MIN_FREE_DAYS constraints for brain integration
     from app.models.constraint import Constraint
@@ -206,6 +216,8 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
         all_subjects=all_subjects,
         teacher_blocked_slots=teacher_blocked_slots,
         homeroom_map=homeroom_map,
+        teacher_rubrica_map=teacher_rubrica_map,
+        teacher_max_work_days=teacher_max_work_days,
         min_free_days_map=min_free_days_map,
         allowed_overlap_pairs=allowed_overlap_pairs,
     )
@@ -287,6 +299,7 @@ def add_system_constraints(
     _add_grouping_sync(model, data, variables)
     _add_single_teacher_per_assignment(model, data, variables)
     _add_meeting_hours_fulfillment(model, data, variables)
+    _add_meeting_consecutive_periods(model, data, variables)
     _add_meetings_on_teaching_days(model, data, variables)
     _add_teacher_blocked_slots(model, data, variables)
     _add_secondary_track_end_of_day(model, data, variables)
@@ -300,6 +313,9 @@ def add_system_constraints(
     _add_grouping_extra_hours_end_of_day(model, data, variables)
     _add_linked_tracks_no_overlap(model, data, variables)
     _add_subject_blocked_slots(model, data, variables)
+    _add_high_school_daily_core(model, data, variables)
+    _add_subject_limit_last_periods(model, data, variables)
+    _add_teacher_late_finish_limit(model, data, variables)
 
 
 # ---------------------------------------------------------------------------
@@ -710,6 +726,89 @@ def _add_meeting_hours_fulfillment(
 
 
 # ---------------------------------------------------------------------------
+# System Constraint 8a: Meeting Consecutive Periods
+# When require_consecutive is True, all meeting hours must be in a single
+# contiguous block on the same day (e.g. 2 hours → double period).
+# ---------------------------------------------------------------------------
+def _add_meeting_consecutive_periods(
+    model: cp_model.CpModel, data: SolverData, variables: SolverVariables
+) -> None:
+    for meeting in data.meetings:
+        if not meeting.teachers or not getattr(meeting, "require_consecutive", False):
+            continue
+        hours = meeting.hours_per_week
+        if hours < 2:
+            continue  # No consecutive constraint needed for 1 hour
+
+        # Collect sorted periods per day for this meeting
+        day_periods: dict[str, list[int]] = {}
+        for key in variables.x_meeting:
+            m_id, day, period = key
+            if m_id == meeting.id:
+                day_periods.setdefault(day, []).append(period)
+
+        for day in day_periods:
+            day_periods[day].sort()
+
+        # All hours must be on a single day in consecutive periods.
+        # Create a bool per day indicating if the meeting is on that day.
+        day_bools: list[cp_model.IntVar] = []
+        for day, periods in day_periods.items():
+            day_vars = [
+                variables.x_meeting[(meeting.id, day, p)]
+                for p in periods
+            ]
+            day_has = model.new_bool_var(f"meeting_{meeting.id}_on_{day}")
+            # day_has = 1 iff any meeting var on this day is 1
+            model.add(sum(day_vars) >= 1).only_enforce_if(day_has)
+            model.add(sum(day_vars) == 0).only_enforce_if(day_has.negated())
+            day_bools.append(day_has)
+
+            # If meeting is on this day, all hours must be consecutive.
+            # For each valid start position, create a block bool.
+            if len(periods) < hours:
+                # Not enough periods on this day — block it entirely
+                model.add(sum(day_vars) == 0)
+                continue
+
+            block_starts: list[cp_model.IntVar] = []
+            for i in range(len(periods) - hours + 1):
+                # Check if periods[i:i+hours] are all consecutive
+                is_consecutive = all(
+                    periods[i + j + 1] == periods[i + j] + 1
+                    for j in range(hours - 1)
+                )
+                if not is_consecutive:
+                    continue
+                block_var = model.new_bool_var(
+                    f"meeting_{meeting.id}_{day}_block_at_p{periods[i]}"
+                )
+                block_starts.append(block_var)
+                # If this block is chosen, exactly these periods are 1
+                for j in range(hours):
+                    model.add(
+                        variables.x_meeting[(meeting.id, day, periods[i + j])] == 1
+                    ).only_enforce_if(block_var)
+                # Periods outside this block must be 0
+                for j, p in enumerate(periods):
+                    if j < i or j >= i + hours:
+                        model.add(
+                            variables.x_meeting[(meeting.id, day, p)] == 0
+                        ).only_enforce_if(block_var)
+
+            if block_starts:
+                # If meeting is on this day, exactly one block must be chosen
+                model.add(sum(block_starts) == 1).only_enforce_if(day_has)
+            else:
+                # No valid consecutive block on this day — block it
+                model.add(sum(day_vars) == 0)
+
+        # Meeting must be on exactly one day
+        if day_bools:
+            model.add(sum(day_bools) == 1)
+
+
+# ---------------------------------------------------------------------------
 # System Constraint 8b: Meetings On Teaching Days
 # Meetings are only scheduled on days when ALL participating teachers teach.
 # ---------------------------------------------------------------------------
@@ -734,6 +833,30 @@ def _add_meetings_on_teaching_days(
     for meeting in data.meetings:
         if not meeting.teachers:
             continue
+
+        # Non-mandatory meetings: teachers attend only if already teaching that day.
+        # Exception: locked_teacher_ids are always mandatory even in non-mandatory meetings.
+        is_mandatory = getattr(meeting, "is_mandatory_attendance", True)
+        locked_ids: set[int] = set(getattr(meeting, "locked_teacher_ids", None) or [])
+
+        # Build set of teachers who have a blocked-slot conflict with any
+        # of the meeting's pinned slots.  These teachers are automatically
+        # excused — they cannot attend and must not constrain the meeting.
+        pinned = getattr(meeting, "pinned_slots", None) or []
+        pinned_set: set[tuple[str, int]] = set()
+        for pin in pinned:
+            d = pin.get("day") if isinstance(pin, dict) else getattr(pin, "day", None)
+            p = pin.get("period") if isinstance(pin, dict) else getattr(pin, "period", None)
+            if d is not None and p is not None:
+                pinned_set.add((d, p))
+
+        conflicting_teacher_ids: set[int] = set()
+        if pinned_set:
+            for teacher in meeting.teachers:
+                teacher_blocked = data.teacher_blocked_slots.get(teacher.id, set())
+                if teacher_blocked & pinned_set:
+                    conflicting_teacher_ids.add(teacher.id)
+
         for day in data.days:
             # Collect meeting vars for this meeting on this day
             day_meeting_vars: list[cp_model.IntVar] = []
@@ -745,12 +868,28 @@ def _add_meetings_on_teaching_days(
             if not day_meeting_vars:
                 continue
 
-            # For each teacher in this meeting, if they have no lessons on this day,
+            # Determine which teachers to enforce for this meeting
+            if is_mandatory:
+                enforced_teachers = [
+                    t for t in meeting.teachers
+                    if t.id not in conflicting_teacher_ids
+                ]
+            elif locked_ids:
+                # Non-mandatory but with locked teachers: only enforce locked ones
+                enforced_teachers = [
+                    t for t in meeting.teachers
+                    if t.id in locked_ids and t.id not in conflicting_teacher_ids
+                ]
+            else:
+                # Fully non-mandatory: skip all enforcement
+                continue
+
+            # For each enforced teacher, if they have no lessons on this day,
             # no meeting can be scheduled on this day.
             # Skip teachers with no teaching assignments at all (admins/managers) —
             # they can attend meetings on any day.
             # Also skip teachers excused from this meeting (approved via overlap system).
-            for teacher in meeting.teachers:
+            for teacher in enforced_teachers:
                 # Check if teacher is excused from this meeting
                 excused_pair = _normalize_pair(
                     "meeting", meeting.id, "teacher_absence", teacher.id
@@ -822,12 +961,23 @@ def _add_teacher_blocked_slots(
                         if tk in variables.x_track:
                             model.add(variables.x_track[tk] == 0)
 
-            # Block meeting variables
+            # Block meeting variables — but only if ALL participating teachers
+            # are blocked at this slot.  If only some are blocked they simply
+            # don't attend; the meeting still takes place.
             for meeting in data.meetings:
-                if any(t.id == teacher_id for t in meeting.teachers):
-                    mk = (meeting.id, day, period)
-                    if mk in variables.x_meeting:
-                        model.add(variables.x_meeting[mk] == 0)
+                participating = [t for t in meeting.teachers if t.id == teacher_id]
+                if not participating:
+                    continue
+                mk = (meeting.id, day, period)
+                if mk not in variables.x_meeting:
+                    continue
+                # Check whether every teacher in the meeting is blocked here
+                all_blocked = all(
+                    (day, period) in data.teacher_blocked_slots.get(t.id, set())
+                    for t in meeting.teachers
+                )
+                if all_blocked:
+                    model.add(variables.x_meeting[mk] == 0)
 
 
 # ---------------------------------------------------------------------------
@@ -1097,3 +1247,240 @@ def _add_subject_blocked_slots(
                 tr_id, day, period = key
                 if tr_id == track.id and (day, period) in blocked:
                     model.add(var == 0)
+
+
+
+# ---------------------------------------------------------------------------
+# System Constraint: High School Daily Core Subjects
+# כיתות י-יא-יב חייבות בכל יום לפחות שיעור אחד של אנגלית/מתמטיקה/מגמות
+# ---------------------------------------------------------------------------
+_CORE_SUBJECT_KEYWORDS = {"אנגלית", "מתמטיקה"}
+
+
+def _add_high_school_daily_core(
+    model: cp_model.CpModel, data: SolverData, variables: SolverVariables
+) -> None:
+    MIN_GRADE_LEVEL = 10  # י and above
+
+    # Identify core subject IDs (English, Math)
+    core_subject_ids: set[int] = set()
+    for subj in data.all_subjects:
+        for kw in _CORE_SUBJECT_KEYWORDS:
+            if kw in subj.name:
+                core_subject_ids.add(subj.id)
+                break
+
+    # Build class_id -> grade level map
+    class_grade: dict[int, int] = {}
+    for cg in data.class_groups:
+        if cg.grade and cg.grade.level >= MIN_GRADE_LEVEL:
+            class_grade[cg.id] = cg.grade.level
+
+    if not class_grade:
+        return  # No high-school classes
+
+    # Identify מגמות subject IDs
+    megamot_keywords = {"מגמות", "מגמה"}
+    megamot_subject_ids: set[int] = set()
+    for subj in data.all_subjects:
+        for kw in megamot_keywords:
+            if kw in subj.name:
+                megamot_subject_ids.add(subj.id)
+                break
+
+    # Build class_id -> set of relevant cluster IDs (core subjects + מגמות only)
+    class_clusters: dict[int, set[int]] = {}
+    for cluster in data.clusters:
+        # Only include clusters whose subject is core (math/English) or מגמות
+        if cluster.subject_id not in core_subject_ids and cluster.subject_id not in megamot_subject_ids:
+            continue
+        for src_class in cluster.source_classes:
+            if src_class.id in class_grade:
+                class_clusters.setdefault(src_class.id, set()).add(cluster.id)
+
+    # For each high-school class, each day: sum of core + מגמה vars >= 1
+    for class_id in class_grade:
+        cluster_ids = class_clusters.get(class_id, set())
+
+        for day in data.days:
+            day_core_vars: list = []
+
+            # Regular lessons: English or Math for this class on this day
+            for key, var in variables.x.items():
+                c_id, s_id, _t_id, d, _p = key
+                if c_id == class_id and d == day and s_id in core_subject_ids:
+                    day_core_vars.append(var)
+
+            # Track vars: only from core/מגמות clusters
+            for cl_id in cluster_ids:
+                for cluster in data.clusters:
+                    if cluster.id != cl_id:
+                        continue
+                    for track in cluster.tracks:
+                        if track.teacher_id is None:
+                            continue
+                        for key, var in variables.x_track.items():
+                            tr_id, d, _p = key
+                            if tr_id == track.id and d == day:
+                                day_core_vars.append(var)
+
+            if day_core_vars:
+                model.add(sum(day_core_vars) >= 1)
+
+
+# ---------------------------------------------------------------------------
+# System Constraint: Subject Limit in Last Periods
+# מקצועות עם limit_last_periods — מקסימום פעם אחת בשעתיים האחרונות ליום לכל כיתה
+# ---------------------------------------------------------------------------
+def _add_subject_limit_last_periods(
+    model: cp_model.CpModel, data: SolverData, variables: SolverVariables
+) -> None:
+    """For each class × limited subject: the subject may appear in the last
+    2 periods at most ONCE across the entire week (not per day — per week).
+
+    A double lesson (7+8) on one day counts as that one weekly occurrence.
+    Tracks in a cluster are synced so we count only one representative.
+    """
+    LAST_N = 2  # last 2 periods of each day
+
+    limited_subject_ids: set[int] = set()
+    for subj in data.all_subjects:
+        if getattr(subj, "limit_last_periods", False):
+            limited_subject_ids.add(subj.id)
+
+    if not limited_subject_ids:
+        return
+
+    # Precompute last periods per day
+    day_last: dict[str, set[int]] = {}
+    for day in data.days:
+        max_p = data.max_period_per_day.get(day, 8)
+        day_last[day] = set(range(max_p - LAST_N + 1, max_p + 1))
+
+    for class_id in {cg.id for cg in data.class_groups}:
+        for subj_id in limited_subject_ids:
+            # Collect one bool per day: "does this subject appear in last
+            # periods on this day for this class?"
+            day_present_vars: list = []
+
+            for day in data.days:
+                last_periods = day_last[day]
+                last_vars: list = []
+
+                # Regular lesson vars
+                for key, var in variables.x.items():
+                    c_id, s_id, _t, d, p = key
+                    if c_id == class_id and s_id == subj_id and d == day and p in last_periods:
+                        last_vars.append(var)
+
+                # Track vars — one representative per cluster (all synced)
+                for cluster in data.clusters:
+                    if cluster.subject_id != subj_id:
+                        continue
+                    if not any(sc.id == class_id for sc in cluster.source_classes):
+                        continue
+                    rep_track = next(
+                        (t for t in cluster.tracks if t.teacher_id is not None),
+                        None,
+                    )
+                    if rep_track is None:
+                        continue
+                    for key, var in variables.x_track.items():
+                        tr_id, d, p = key
+                        if tr_id == rep_track.id and d == day and p in last_periods:
+                            last_vars.append(var)
+
+                if not last_vars:
+                    continue
+
+                # Bool: subject present in last periods on this day
+                present = model.new_bool_var(
+                    f"limit_last_{subj_id}_{class_id}_{day}"
+                )
+                model.add_max_equality(present, last_vars)
+                day_present_vars.append(present)
+
+            # At most 1 day per week with this subject in last periods
+            if len(day_present_vars) > 1:
+                model.add(sum(day_present_vars) <= 1)
+
+
+# ---------------------------------------------------------------------------
+# System Constraint: Teacher Late Finish Limit
+# מחנכת — מקסימום 2 ימים בשעה שמינית
+# מורה מקצועי — מקסימום 3 ימים בשעה שמינית, שאר הימים עד שעה שישית בלבד
+# ---------------------------------------------------------------------------
+def _add_teacher_late_finish_limit(
+    model: cp_model.CpModel, data: SolverData, variables: SolverVariables
+) -> None:
+    LATE_PERIOD = 8    # שעה שמינית
+    EARLY_MAX = 6      # ביום "קצר" — עד שעה שישית
+    MAX_LATE_DAYS_HOMEROOM = 2
+    MAX_LATE_DAYS_REGULAR = 3
+
+    # Build teacher -> track_id set for fast lookup
+    teacher_track_ids: dict[int, set[int]] = {}
+    for cluster in data.clusters:
+        for track in cluster.tracks:
+            if track.teacher_id is not None:
+                teacher_track_ids.setdefault(track.teacher_id, set()).add(track.id)
+
+    # Collect all teaching teacher IDs
+    teacher_ids: set[int] = set()
+    for req in data.requirements:
+        if req.teacher_id is not None and not req.is_grouped:
+            teacher_ids.add(req.teacher_id)
+    teacher_ids.update(teacher_track_ids.keys())
+
+    for teacher_id in teacher_ids:
+        is_homeroom = teacher_id in data.homeroom_map
+        max_late = MAX_LATE_DAYS_HOMEROOM if is_homeroom else MAX_LATE_DAYS_REGULAR
+        my_track_ids = teacher_track_ids.get(teacher_id, set())
+
+        # Collect vars per day at period >= LATE_PERIOD (for "late" bool)
+        late_vars_by_day: dict[str, list] = {}
+        # Collect vars per day at period > EARLY_MAX (for "early day" enforcement)
+        after6_vars_by_day: dict[str, list] = {}
+
+        for key, var in variables.x.items():
+            _c, _s, t_id, day, period = key
+            if t_id != teacher_id:
+                continue
+            if period >= LATE_PERIOD:
+                late_vars_by_day.setdefault(day, []).append(var)
+            if period > EARLY_MAX:
+                after6_vars_by_day.setdefault(day, []).append(var)
+
+        for key, var in variables.x_track.items():
+            tr_id, day, period = key
+            if tr_id not in my_track_ids:
+                continue
+            if period >= LATE_PERIOD:
+                late_vars_by_day.setdefault(day, []).append(var)
+            if period > EARLY_MAX:
+                after6_vars_by_day.setdefault(day, []).append(var)
+
+        # --- Limit: max N days with period >= 8 ---
+        day_late_bools: dict[str, cp_model.IntVar] = {}
+        for day, dvars in late_vars_by_day.items():
+            b = model.new_bool_var(f"late8_t{teacher_id}_{day}")
+            model.add_max_equality(b, dvars)
+            day_late_bools[day] = b
+
+        if day_late_bools:
+            model.add(sum(day_late_bools.values()) <= max_late)
+
+        # --- Regular teachers: on non-late days, finish by period 6 ---
+        if not is_homeroom:
+            for day, dvars_after6 in after6_vars_by_day.items():
+                # is_late_day = 1 iff teacher teaches at period >= 8 on this day
+                is_late_day = day_late_bools.get(day)
+                if is_late_day is None:
+                    # No vars at period 8+ on this day → this is always an "early day"
+                    # Block everything after period 6
+                    for v in dvars_after6:
+                        model.add(v == 0)
+                else:
+                    # If NOT a late day → no lessons after period 6
+                    for v in dvars_after6:
+                        model.add(v == 0).only_enforce_if(is_late_day.negated())

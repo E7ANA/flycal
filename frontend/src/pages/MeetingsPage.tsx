@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, RefreshCw, RotateCcw } from "lucide-react";
+import { Plus, Pencil, Trash2, RefreshCw, RotateCcw, Calendar, Lock, LockOpen } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import {
@@ -121,6 +122,9 @@ function MeetingFormDialog({
   const [blockedSlots, setBlockedSlots] = useState<{ day: string; period: number }[]>(
     meeting?.blocked_slots ?? [],
   );
+  const [requireConsecutive, setRequireConsecutive] = useState(
+    meeting?.require_consecutive ?? false,
+  );
   const [selectedTeacherIds, setSelectedTeacherIds] = useState<number[]>(
     () => {
       if (meeting?.teacher_ids?.length) return meeting.teacher_ids;
@@ -130,6 +134,9 @@ function MeetingFormDialog({
       }
       return [];
     },
+  );
+  const [lockedTeacherIds, setLockedTeacherIds] = useState<number[]>(
+    meeting?.locked_teacher_ids ?? [],
   );
 
   // When teachers load and we have a new built-in meeting with empty selection, auto-select
@@ -157,6 +164,8 @@ function MeetingFormDialog({
         teacher_ids: selectedTeacherIds,
         pinned_slots: pinnedSlots.length > 0 ? pinnedSlots : null,
         blocked_slots: blockedSlots.length > 0 ? blockedSlots : null,
+        require_consecutive: requireConsecutive,
+        locked_teacher_ids: lockedTeacherIds.length > 0 ? lockedTeacherIds : null,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["meetings", schoolId] });
@@ -176,6 +185,8 @@ function MeetingFormDialog({
         teacher_ids: selectedTeacherIds,
         pinned_slots: pinnedSlots.length > 0 ? pinnedSlots : null,
         blocked_slots: blockedSlots.length > 0 ? blockedSlots : null,
+        require_consecutive: requireConsecutive,
+        locked_teacher_ids: lockedTeacherIds.length > 0 ? lockedTeacherIds : null,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["meetings", schoolId] });
@@ -188,7 +199,20 @@ function MeetingFormDialog({
   const loading = createMut.isPending || updateMut.isPending;
 
   const toggleTeacher = (tid: number) => {
-    setSelectedTeacherIds((prev) =>
+    setSelectedTeacherIds((prev) => {
+      const removing = prev.includes(tid);
+      if (removing) {
+        // Also unlock if removing
+        setLockedTeacherIds((lk) => lk.filter((id) => id !== tid));
+        return prev.filter((id) => id !== tid);
+      }
+      return [...prev, tid];
+    });
+  };
+
+  const toggleLock = (tid: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setLockedTeacherIds((prev) =>
       prev.includes(tid) ? prev.filter((id) => id !== tid) : [...prev, tid],
     );
   };
@@ -303,6 +327,18 @@ function MeetingFormDialog({
           </div>
         </div>
 
+        {hoursPerWeek >= 2 && (
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={requireConsecutive}
+              onChange={(e) => setRequireConsecutive(e.target.checked)}
+              className="rounded border-border"
+            />
+            <span className="text-sm">שעה כפולה (שעות רצופות)</span>
+          </label>
+        )}
+
         {/* Hybrid teacher picker */}
         <div>
           <div className="flex items-center justify-between mb-2">
@@ -352,26 +388,50 @@ function MeetingFormDialog({
 
           {/* Teacher name list */}
           <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto">
-            {teachers.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => toggleTeacher(t.id)}
-                className={`px-3 py-1 text-sm rounded-full border transition-colors cursor-pointer ${
-                  selectedTeacherIds.includes(t.id)
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-background hover:bg-muted"
-                }`}
-              >
-                {t.name}
-              </button>
-            ))}
+            {teachers.map((t) => {
+              const isSelected = selectedTeacherIds.includes(t.id);
+              const isLocked = lockedTeacherIds.includes(t.id);
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => toggleTeacher(t.id)}
+                  className={`flex items-center gap-1 px-3 py-1 text-sm rounded-full border transition-colors cursor-pointer ${
+                    isSelected
+                      ? isLocked
+                        ? "bg-amber-600 text-white border-amber-600"
+                        : "bg-primary text-primary-foreground border-primary"
+                      : "bg-background hover:bg-muted"
+                  }`}
+                >
+                  {t.name}
+                  {isSelected && (
+                    <span
+                      onClick={(e) => toggleLock(t.id, e)}
+                      className="mr-1 hover:opacity-70"
+                      title={isLocked ? "נעול — חובה להשתתף" : "לחץ לנעול"}
+                    >
+                      {isLocked ? (
+                        <Lock className="h-3 w-3" />
+                      ) : (
+                        <LockOpen className="h-3 w-3 opacity-40" />
+                      )}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
             {teachers.length === 0 && (
               <p className="text-sm text-muted-foreground">
                 אין מורים — הוסף מורים קודם
               </p>
             )}
           </div>
+          {lockedTeacherIds.length > 0 && (
+            <p className="text-xs text-amber-600 mt-1">
+              {lockedTeacherIds.length} מורים נעולים — חייבים להשתתף גם אם הישיבה לא חובה
+            </p>
+          )}
         </div>
 
         <div>
@@ -405,6 +465,7 @@ function MeetingFormDialog({
 export default function MeetingsPage() {
   const schoolId = useSchoolStore((s) => s.activeSchoolId);
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Meeting | null>(null);
@@ -455,16 +516,26 @@ export default function MeetingsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold">ישיבות</h2>
-        <Button
-          size="sm"
-          onClick={() => {
-            setEditing(null);
-            setFormOpen(true);
-          }}
-        >
-          <Plus className="h-4 w-4" />
-          ישיבה חדשה
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => navigate("/results?view=meetings")}
+          >
+            <Calendar className="h-4 w-4" />
+            צפה במערכת ישיבות
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => {
+              setEditing(null);
+              setFormOpen(true);
+            }}
+          >
+            <Plus className="h-4 w-4" />
+            ישיבה חדשה
+          </Button>
+        </div>
       </div>
 
       <DataTable
@@ -487,23 +558,32 @@ export default function MeetingsPage() {
           },
           {
             header: "מורים",
-            accessor: (m) => (
-              <div className="flex flex-wrap gap-1 items-center">
-                <span className="text-sm text-muted-foreground">
-                  {m.teacher_ids.length} מורים
-                </span>
-                {m.teacher_ids.slice(0, 3).map((tid) => (
-                  <Badge key={tid} variant="outline" className="text-xs">
-                    {teacherMap[tid] ?? tid}
-                  </Badge>
-                ))}
-                {m.teacher_ids.length > 3 && (
-                  <span className="text-xs text-muted-foreground">
-                    +{m.teacher_ids.length - 3}
+            accessor: (m) => {
+              const lockedCount = m.locked_teacher_ids?.length ?? 0;
+              return (
+                <div className="flex flex-wrap gap-1 items-center">
+                  <span className="text-sm text-muted-foreground">
+                    {m.teacher_ids.length} מורים
                   </span>
-                )}
-              </div>
-            ),
+                  {lockedCount > 0 && (
+                    <Badge variant="default" className="text-xs bg-amber-600">
+                      <Lock className="h-3 w-3 ml-1" />
+                      {lockedCount} נעולים
+                    </Badge>
+                  )}
+                  {m.teacher_ids.slice(0, 3).map((tid) => (
+                    <Badge key={tid} variant="outline" className="text-xs">
+                      {teacherMap[tid] ?? tid}
+                    </Badge>
+                  ))}
+                  {m.teacher_ids.length > 3 && (
+                    <span className="text-xs text-muted-foreground">
+                      +{m.teacher_ids.length - 3}
+                    </span>
+                  )}
+                </div>
+              );
+            },
           },
           {
             header: "סטטוס",

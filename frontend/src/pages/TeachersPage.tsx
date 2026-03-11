@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Calendar } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import {
@@ -179,6 +180,12 @@ function TeacherFormDialog({
   const [employment, setEmployment] = useState(
     teacher?.employment_percentage ?? 100,
   );
+  const [rubricaHours, setRubricaHours] = useState<string>(
+    teacher?.rubrica_hours != null ? String(teacher.rubrica_hours) : "",
+  );
+  const [maxWorkDays, setMaxWorkDays] = useState<string>(
+    teacher?.max_work_days != null ? String(teacher.max_work_days) : "",
+  );
   const [selectedSubjectIds, setSelectedSubjectIds] = useState<number[]>(
     teacher?.subject_ids ?? [],
   );
@@ -238,6 +245,8 @@ function TeacherFormDialog({
         max_hours_per_week: maxHours,
         min_hours_per_week: minHours || null,
         employment_percentage: employment,
+        rubrica_hours: rubricaHours !== "" ? Number(rubricaHours) : null,
+        max_work_days: maxWorkDays !== "" ? Number(maxWorkDays) : null,
         subject_ids: selectedSubjectIds,
         is_coordinator: isCoordinator,
         homeroom_class_id: homeroomClassId,
@@ -263,6 +272,8 @@ function TeacherFormDialog({
         max_hours_per_week: maxHours,
         min_hours_per_week: minHours || null,
         employment_percentage: employment,
+        rubrica_hours: rubricaHours !== "" ? Number(rubricaHours) : null,
+        max_work_days: maxWorkDays !== "" ? Number(maxWorkDays) : null,
         subject_ids: selectedSubjectIds,
         is_coordinator: isCoordinator,
         homeroom_class_id: homeroomClassId,
@@ -312,7 +323,7 @@ function TeacherFormDialog({
           />
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-4 gap-3">
           <div>
             <Label htmlFor="max-hours">מקס׳ שעות</Label>
             <Input
@@ -343,6 +354,46 @@ function TeacherFormDialog({
               value={employment}
               onChange={(e) => setEmployment(Number(e.target.value))}
             />
+          </div>
+          <div>
+            <Label htmlFor="rubrica-hours">רובריקה (סה״כ שעות משרה)</Label>
+            <Input
+              id="rubrica-hours"
+              type="number"
+              min={0}
+              step={0.5}
+              value={rubricaHours}
+              onChange={(e) => setRubricaHours(e.target.value)}
+              placeholder="שעות"
+            />
+            {maxWorkDays === "" && (
+              <p className="text-xs text-muted-foreground mt-1">
+                {rubricaHours !== "" && Number(rubricaHours) > 0
+                  ? Number(rubricaHours) > 27
+                    ? "→ עד 4 ימי עבודה"
+                    : Number(rubricaHours) >= 20
+                      ? "→ עד 3 ימי עבודה"
+                      : "→ עד 2 ימי עבודה"
+                  : "לא הוגדרה — ימי עבודה ייקבעו לפי שעות פרונטליות"}
+              </p>
+            )}
+          </div>
+          <div>
+            <Label htmlFor="max-work-days">ימי עבודה (ידני)</Label>
+            <Input
+              id="max-work-days"
+              type="number"
+              min={1}
+              max={6}
+              value={maxWorkDays}
+              onChange={(e) => setMaxWorkDays(e.target.value)}
+              placeholder="אוטומטי"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              {maxWorkDays !== ""
+                ? `→ ${maxWorkDays} ימי עבודה (גובר על רובריקה)`
+                : "ריק = חישוב אוטומטי לפי רובריקה"}
+            </p>
           </div>
         </div>
 
@@ -502,6 +553,7 @@ function TeacherFormDialog({
 export default function TeachersPage() {
   const schoolId = useSchoolStore((s) => s.activeSchoolId);
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Teacher | null>(null);
@@ -578,6 +630,39 @@ export default function TeachersPage() {
                 : String(t.max_hours_per_week),
           },
           {
+            header: "רובריקה",
+            accessor: (t) =>
+              t.rubrica_hours != null
+                ? String(t.rubrica_hours)
+                : "—",
+            className: "w-20",
+          },
+          {
+            header: "ימי עבודה",
+            accessor: (t) => {
+              if (t.max_work_days != null) {
+                return (
+                  <span className="font-medium" title="הוגדר ידנית">
+                    {t.max_work_days} ימים
+                  </span>
+                );
+              }
+              const rubrica = t.rubrica_hours;
+              let maxDays: number | null = null;
+              if (rubrica != null && rubrica > 0) {
+                if (rubrica > 27) maxDays = 4;
+                else if (rubrica >= 20) maxDays = 3;
+                else maxDays = 2;
+              }
+              return maxDays != null ? (
+                <span className="text-muted-foreground" title="לפי רובריקה">
+                  {maxDays} ימים
+                </span>
+              ) : "—";
+            },
+            className: "w-24",
+          },
+          {
             header: "% משרה",
             accessor: (t) =>
               t.employment_percentage != null
@@ -639,6 +724,17 @@ export default function TeachersPage() {
                 <Button
                   variant="ghost"
                   size="icon"
+                  title="צפה במערכת"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigate(`/results?view=teacher&id=${t.id}`);
+                  }}
+                >
+                  <Calendar className="h-4 w-4 text-primary" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={(e) => {
                     e.stopPropagation();
                     setEditing(t);
@@ -659,7 +755,7 @@ export default function TeachersPage() {
                 </Button>
               </div>
             ),
-            className: "w-24",
+            className: "w-32",
           },
         ]}
         emptyMessage="אין מורים — הוסף מורה חדש/ה"

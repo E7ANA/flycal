@@ -39,6 +39,8 @@ export interface Teacher {
   max_hours_per_week: number;
   min_hours_per_week: number | null;
   employment_percentage: number | null;
+  rubrica_hours: number | null;
+  max_work_days: number | null;
   subject_ids: number[];
   is_coordinator: boolean;
   homeroom_class_id: number | null;
@@ -60,6 +62,7 @@ export interface Subject {
   morning_priority: number | null;
   always_double: boolean;
   blocked_slots: BlockedSlot[] | null;
+  limit_last_periods: boolean;
 }
 
 export interface PinnedSlot {
@@ -207,6 +210,8 @@ export interface Meeting {
   pinned_slots: PinnedSlot[] | null;
   blocked_slots: PinnedSlot[] | null;
   allow_overlap: boolean;
+  require_consecutive: boolean;
+  locked_teacher_ids: number[] | null;
 }
 
 export interface ScheduledMeeting {

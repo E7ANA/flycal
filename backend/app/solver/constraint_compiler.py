@@ -1732,32 +1732,84 @@ def _compile_homeroom_early(
     model: cp_model.CpModel, data: SolverData,
     variables: SolverVariables, constraint: Constraint,
 ) -> None:
-    """SOFT: homeroom teacher lessons for their class should be at the beginning of the day.
+    """Homeroom teacher ("מחנכת") must teach on Sunday with strong preference
+    for opening the morning (period 1).
 
-    For each teacher with homeroom_class_id, penalize their lessons for that
-    specific class when scheduled in later periods.  The penalty grows with
-    the period number so periods 1-2 are free, and later periods get increasing cost.
+    Hard constraints:
+    - Homeroom teacher MUST teach her homeroom class on SUNDAY (at least 1 lesson).
+    - Homeroom teacher MUST open the morning (period 1) on SUNDAY specifically.
+
+    Soft bonuses/penalties:
+    - Period 1 on SUNDAY: very high bonus (weight × 8)
+    - Period 2 on SUNDAY: high bonus (weight × 4)
+    - Period 1 on other days: moderate bonus (weight × 3)
+    - Period 2 on other days: small bonus (weight × 1)
+    - Period 3+: penalty proportional to lateness (period - 2)
+
+    Bonuses are implemented as negative-weight penalties so the minimizing
+    objective treats them as rewards.
     """
     if not data.homeroom_map:
         return
 
+    w = constraint.weight
+
     for teacher_id, class_id in data.homeroom_map.items():
-        # Find x variables where this teacher teaches this class
+        # Collect period-1 Sunday vars for the HARD constraint
+        period1_sunday_vars: list = []
+        # Collect all Sunday vars to enforce teaching on Sunday
+        sunday_vars: list = []
+
         for key, var in variables.x.items():
             c_id, s_id, t_id, day, period = key
             if t_id != teacher_id or c_id != class_id:
                 continue
-            # No penalty for first 2 periods — homeroom is fine there
-            if period <= 2:
-                continue
-            # Penalty proportional to how late in the day (period 3→1, 4→2, 5→3, ...)
-            lateness = period - 2
-            weighted = model.new_int_var(
-                0, lateness,
-                f"hr_early_{constraint.id}_t{teacher_id}_c{class_id}_{day}_p{period}",
-            )
-            model.add(weighted == lateness * var)
-            _add_soft_penalty(model, variables, constraint, weighted)
+
+            prefix = f"hr_early_{constraint.id}_t{teacher_id}_c{class_id}_{day}_p{period}"
+            is_sunday = day == "SUNDAY"
+
+            if is_sunday:
+                sunday_vars.append(var)
+
+            if period == 1 and is_sunday:
+                period1_sunday_vars.append(var)
+
+            if period == 1:
+                # Bonus for teaching homeroom class at period 1
+                bonus_multiplier = 8 if is_sunday else 3
+                bonus_var = model.new_int_var(
+                    0, 1, f"{prefix}_bonus",
+                )
+                model.add(bonus_var == var)
+                bonus_weight = w * bonus_multiplier
+                variables.penalties.append((bonus_var, -bonus_weight, constraint.id))
+
+            elif period == 2:
+                # Smaller bonus for period 2
+                bonus_multiplier = 4 if is_sunday else 1
+                bonus_var = model.new_int_var(
+                    0, 1, f"{prefix}_bonus",
+                )
+                model.add(bonus_var == var)
+                bonus_weight = w * bonus_multiplier
+                variables.penalties.append((bonus_var, -bonus_weight, constraint.id))
+
+            else:
+                # Period 3+: penalty proportional to how late in the day
+                lateness = period - 2
+                penalty_var = model.new_int_var(
+                    0, lateness, f"{prefix}_penalty",
+                )
+                model.add(penalty_var == lateness * var)
+                _add_soft_penalty(model, variables, constraint, penalty_var)
+
+        # HARD: homeroom teacher must teach her class on Sunday
+        if sunday_vars:
+            model.add(sum(sunday_vars) >= 1)
+
+        # HARD: homeroom teacher must open morning (period 1) on Sunday
+        if period1_sunday_vars:
+            model.add(sum(period1_sunday_vars) >= 1)
 
 
 # ---------------------------------------------------------------------------

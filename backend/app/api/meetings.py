@@ -21,7 +21,11 @@ def _meeting_to_read(meeting: Meeting) -> MeetingRead:
         color=meeting.color,
         teacher_ids=[t.id for t in meeting.teachers],
         pinned_slots=meeting.pinned_slots,
+        blocked_slots=meeting.blocked_slots,
         is_mandatory_attendance=meeting.is_mandatory_attendance,
+        allow_overlap=meeting.allow_overlap,
+        require_consecutive=meeting.require_consecutive,
+        locked_teacher_ids=meeting.locked_teacher_ids,
     )
 
 

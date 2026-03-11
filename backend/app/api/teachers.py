@@ -17,6 +17,8 @@ def _teacher_to_read(teacher: Teacher) -> TeacherRead:
         max_hours_per_week=teacher.max_hours_per_week,
         min_hours_per_week=teacher.min_hours_per_week,
         employment_percentage=teacher.employment_percentage,
+        rubrica_hours=teacher.rubrica_hours,
+        max_work_days=teacher.max_work_days,
         subject_ids=[s.id for s in teacher.subjects],
         is_coordinator=teacher.is_coordinator,
         homeroom_class_id=teacher.homeroom_class_id,

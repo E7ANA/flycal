@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Calendar } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import { fetchGrades, createGrade, updateGrade, deleteGrade } from "@/api/grades";
@@ -217,6 +218,7 @@ function ClassFormDialog({
 export default function ClassesPage() {
   const schoolId = useSchoolStore((s) => s.activeSchoolId);
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   // Dialog state
   const [gradeDialogOpen, setGradeDialogOpen] = useState(false);
@@ -356,6 +358,17 @@ export default function ClassesPage() {
               header: "פעולות",
               accessor: (c) => (
                 <div className="flex gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    title="צפה במערכת"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/results?view=class&id=${c.id}`);
+                    }}
+                  >
+                    <Calendar className="h-4 w-4 text-primary" />
+                  </Button>
                   <Button
                     variant="ghost"
                     size="icon"

@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, X } from "lucide-react";
+import { Plus, Pencil, Trash2, X, Calendar } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import {
@@ -46,6 +47,9 @@ function SubjectFormDialog({
   const [alwaysDouble, setAlwaysDouble] = useState(
     subject?.always_double ?? false,
   );
+  const [limitLastPeriods, setLimitLastPeriods] = useState(
+    subject?.limit_last_periods ?? false,
+  );
   const [doublePriority, setDoublePriority] = useState<string>(
     subject?.double_priority != null ? String(subject.double_priority) : "",
   );
@@ -80,6 +84,7 @@ function SubjectFormDialog({
         morning_priority: morningPriority !== "" ? Number(morningPriority) : null,
         always_double: alwaysDouble,
         blocked_slots: blockedSlots.length > 0 ? blockedSlots : null,
+        limit_last_periods: limitLastPeriods,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
@@ -98,6 +103,7 @@ function SubjectFormDialog({
         morning_priority: morningPriority !== "" ? Number(morningPriority) : null,
         always_double: alwaysDouble,
         blocked_slots: blockedSlots.length > 0 ? blockedSlots : null,
+        limit_last_periods: limitLastPeriods,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
@@ -159,6 +165,21 @@ function SubjectFormDialog({
           </Label>
           <span className="text-xs text-muted-foreground">
             שעות זוגיות = הכל כפולים, אי-זוגי = כפולים + בודד אחד
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <input
+            id="subj-limit-last"
+            type="checkbox"
+            checked={limitLastPeriods}
+            onChange={(e) => setLimitLastPeriods(e.target.checked)}
+            className="h-4 w-4 accent-primary cursor-pointer"
+          />
+          <Label htmlFor="subj-limit-last" className="cursor-pointer">
+            הגבלה בשעות אחרונות
+          </Label>
+          <span className="text-xs text-muted-foreground">
+            לא יותר מפעם אחת בשעתיים האחרונות של היום (לכל כיתה)
           </span>
         </div>
         <div>
@@ -270,6 +291,7 @@ function SubjectFormDialog({
 export default function SubjectsPage() {
   const schoolId = useSchoolStore((s) => s.activeSchoolId);
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   const [subjectFormOpen, setSubjectFormOpen] = useState(false);
   const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
@@ -355,6 +377,12 @@ export default function SubjectsPage() {
               className: "w-24 text-center",
             },
             {
+              header: "הגבלת אחרונות",
+              accessor: (s) =>
+                s.limit_last_periods ? "✓" : "—",
+              className: "w-28 text-center",
+            },
+            {
               header: "עדיפות כפולים",
               accessor: (s) =>
                 s.double_priority != null
@@ -400,6 +428,17 @@ export default function SubjectsPage() {
                   <Button
                     variant="ghost"
                     size="icon"
+                    title="צפה במערכת"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/results?view=subject&id=${s.id}`);
+                    }}
+                  >
+                    <Calendar className="h-4 w-4 text-primary" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={(e) => {
                       e.stopPropagation();
                       setEditingSubject(s);
@@ -424,7 +463,7 @@ export default function SubjectsPage() {
                   </Button>
                 </div>
               ),
-              className: "w-24",
+              className: "w-32",
             },
           ]}
           emptyMessage="אין מקצועות — הוסף מקצוע חדש"
