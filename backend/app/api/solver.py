@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db, SessionLocal
+from app.dependencies import get_current_user, require_super_admin
 from app.models.meeting import Meeting, meeting_teachers
 from app.models.timetable import AllowedOverlap, ScheduledLesson, ScheduledMeeting, Solution
 from app.models.class_group import Track
@@ -33,7 +34,7 @@ from app.solver.engine import (
 from app.solver.model_builder import load_solver_data
 from app.solver.validator import validate
 
-router = APIRouter(prefix="/api", tags=["solver"])
+router = APIRouter(prefix="/api", tags=["solver"], dependencies=[Depends(require_super_admin)])
 
 
 class SolveRequest(BaseModel):

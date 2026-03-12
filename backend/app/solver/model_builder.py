@@ -816,10 +816,14 @@ def _add_meetings_on_teaching_days(
     model: cp_model.CpModel, data: SolverData, variables: SolverVariables
 ) -> None:
     # Build teacher_teaches_on_day[teacher_id][day] = list of lesson/track vars
+    # Exclude vars on blocked slots — a teacher with all slots blocked on a day
+    # should not be considered "active" on that day.
     teacher_day_vars: dict[int, dict[str, list[cp_model.IntVar]]] = {}
 
     for key, var in variables.x.items():
         _c, _s, t_id, day, _p = key
+        if (day, _p) in data.teacher_blocked_slots.get(t_id, set()):
+            continue
         teacher_day_vars.setdefault(t_id, {}).setdefault(day, []).append(var)
 
     for cluster in data.clusters:
@@ -828,6 +832,8 @@ def _add_meetings_on_teaching_days(
                 for key, var in variables.x_track.items():
                     tk_id, day, _p = key
                     if tk_id == track.id:
+                        if (day, _p) in data.teacher_blocked_slots.get(track.teacher_id, set()):
+                            continue
                         teacher_day_vars.setdefault(track.teacher_id, {}).setdefault(day, []).append(var)
 
     for meeting in data.meetings:

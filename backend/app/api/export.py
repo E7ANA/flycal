@@ -17,6 +17,7 @@ from openpyxl.utils import get_column_letter
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_current_user
 from app.models.class_group import ClassGroup, Grade, GroupingCluster, Track
 from app.models.meeting import Meeting
 from app.models.school import School
@@ -24,7 +25,7 @@ from app.models.subject import Subject
 from app.models.teacher import Teacher
 from app.models.timetable import ScheduledLesson, ScheduledMeeting, Solution
 
-router = APIRouter(prefix="/api", tags=["export"])
+router = APIRouter(prefix="/api", tags=["export"], dependencies=[Depends(get_current_user)])
 
 DAY_LABELS = {
     "SUNDAY": "ראשון",

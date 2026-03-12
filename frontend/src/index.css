@@ -1,28 +1,31 @@
 @import "tailwindcss";
 
 @theme {
-  --color-background: #ffffff;
-  --color-foreground: #0a0a0a;
-  --color-muted: #f5f5f5;
-  --color-muted-foreground: #737373;
-  --color-border: #e5e5e5;
-  --color-input: #e5e5e5;
-  --color-ring: #2563eb;
-  --color-primary: #2563eb;
+  /* flycal brand palette — sky blue gradient */
+  --color-background: #f8fbff;
+  --color-foreground: #1a2332;
+  --color-muted: #edf4fb;
+  --color-muted-foreground: #6b7f96;
+  --color-border: #d4e3f0;
+  --color-input: #d4e3f0;
+  --color-ring: #5ba8d4;
+  --color-primary: #5ba8d4;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #f5f5f5;
-  --color-secondary-foreground: #171717;
-  --color-destructive: #ef4444;
+  --color-secondary: #edf4fb;
+  --color-secondary-foreground: #1a2332;
+  --color-destructive: #e5574f;
   --color-destructive-foreground: #ffffff;
-  --color-accent: #f5f5f5;
-  --color-accent-foreground: #171717;
+  --color-accent: #e0f0fa;
+  --color-accent-foreground: #1a2332;
   --color-card: #ffffff;
-  --color-card-foreground: #0a0a0a;
+  --color-card-foreground: #1a2332;
   --color-popover: #ffffff;
-  --color-popover-foreground: #0a0a0a;
+  --color-popover-foreground: #1a2332;
+  --color-success: #4caf82;
+  --color-success-foreground: #ffffff;
   --radius-sm: 0.25rem;
-  --radius-md: 0.375rem;
-  --radius-lg: 0.5rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
   --font-sans: "Rubik", "Heebo", system-ui, sans-serif;
 }
 

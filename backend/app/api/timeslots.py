@@ -2,11 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_current_user
 from app.models.school import School
 from app.models.timeslot import DayOfWeek, TimeSlot
 from app.schemas.timeslot import TimeSlotBatchUpdate, TimeSlotRead, TimeSlotUpdate
 
-router = APIRouter(prefix="/api/timeslots", tags=["timeslots"])
+router = APIRouter(prefix="/api/timeslots", tags=["timeslots"], dependencies=[Depends(get_current_user)])
 
 
 @router.post("/generate/{school_id}", response_model=list[TimeSlotRead], status_code=201)

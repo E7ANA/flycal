@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_current_user
 from app.models.constraint import (
     Constraint,
     ConstraintCategory,
@@ -18,7 +19,7 @@ from app.schemas.constraint import (
     ConstraintWeightUpdate,
 )
 
-router = APIRouter(prefix="/api/constraints", tags=["constraints"])
+router = APIRouter(prefix="/api/constraints", tags=["constraints"], dependencies=[Depends(get_current_user)])
 
 # ---------------------------------------------------------------------------
 # Constraint Templates

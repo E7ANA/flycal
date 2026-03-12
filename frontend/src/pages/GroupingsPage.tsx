@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, ChevronDown, ChevronLeft, Undo2 } from "lucide-react";
+import { Plus, Pencil, Trash2, ChevronDown, ChevronLeft, Undo2, X } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import {
@@ -19,6 +19,9 @@ import {
 } from "@/api/groupings";
 import {
   fetchSubjects,
+  createSubject,
+  updateSubject,
+  deleteSubject,
   fetchRequirements,
   createRequirement,
   updateRequirement,
@@ -44,14 +47,16 @@ import { Select } from "@/components/common/Select";
 import { Label } from "@/components/common/Label";
 import { Badge } from "@/components/common/Badge";
 import { MultiClassPicker } from "@/components/common/MultiClassPicker";
-import type { Track, Subject, Teacher, Grade, ClassGroup, SubjectRequirement, PinnedSlot } from "@/types/models";
+import { InlineConstraints } from "@/components/common/InlineConstraints";
+import { DAY_LABELS, DAYS_ORDER } from "@/lib/constraints";
+import type { Track, Subject, Teacher, Grade, ClassGroup, SubjectRequirement, PinnedSlot, BlockedSlot } from "@/types/models";
 
-type TabId = "requirements" | "groupings" | "shared";
+type TabId = "subjects" | "requirements" | "shared";
 
 const TABS: { id: TabId; label: string }[] = [
+  { id: "subjects", label: "מקצועות" },
   { id: "requirements", label: "דרישות" },
-  { id: "groupings", label: "הקבצות" },
-  { id: "shared", label: "משותפים" },
+  { id: "shared", label: "שיעורים משותפים" },
 ];
 
 // ─── Requirement Form ────────────────────────────────────
@@ -1193,12 +1198,169 @@ function CrossGradeFormDialog({
   );
 }
 
+// ─── Subject Form ────────────────────────────────────────
+function SubjectFormDialog({
+  open,
+  onClose,
+  subject,
+  schoolId,
+}: {
+  open: boolean;
+  onClose: () => void;
+  subject: Subject | null;
+  schoolId: number;
+}) {
+  const qc = useQueryClient();
+  const [name, setName] = useState(subject?.name ?? "");
+  const [color, setColor] = useState(subject?.color ?? "#5ba8d4");
+  const [alwaysDouble, setAlwaysDouble] = useState(subject?.always_double ?? false);
+  const [limitLastPeriods, setLimitLastPeriods] = useState(subject?.limit_last_periods ?? false);
+  const [doublePriority, setDoublePriority] = useState<string>(
+    subject?.double_priority != null ? String(subject.double_priority) : "",
+  );
+  const [morningPriority, setMorningPriority] = useState<string>(
+    subject?.morning_priority != null ? String(subject.morning_priority) : "",
+  );
+  const [blockedSlots, setBlockedSlots] = useState<BlockedSlot[]>(subject?.blocked_slots ?? []);
+  const [blockDay, setBlockDay] = useState("");
+  const [blockPeriod, setBlockPeriod] = useState("");
+
+  const addBlockedSlot = () => {
+    if (!blockDay || !blockPeriod) return;
+    const p = Number(blockPeriod);
+    if (blockedSlots.some((s) => s.day === blockDay && s.period === p)) return;
+    setBlockedSlots([...blockedSlots, { day: blockDay, period: p }]);
+    setBlockPeriod("");
+  };
+
+  const removeBlockedSlot = (day: string, period: number) => {
+    setBlockedSlots(blockedSlots.filter((s) => !(s.day === day && s.period === period)));
+  };
+
+  const createMut = useMutation({
+    mutationFn: () =>
+      createSubject({
+        school_id: schoolId,
+        name,
+        color,
+        double_priority: doublePriority !== "" ? Number(doublePriority) : null,
+        morning_priority: morningPriority !== "" ? Number(morningPriority) : null,
+        always_double: alwaysDouble,
+        blocked_slots: blockedSlots.length > 0 ? blockedSlots : null,
+        limit_last_periods: limitLastPeriods,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
+      toast.success("מקצוע נוסף בהצלחה");
+      onClose();
+    },
+    onError: () => toast.error("שגיאה בהוספת מקצוע"),
+  });
+
+  const updateMut = useMutation({
+    mutationFn: () =>
+      updateSubject(subject!.id, {
+        name,
+        color,
+        double_priority: doublePriority !== "" ? Number(doublePriority) : null,
+        morning_priority: morningPriority !== "" ? Number(morningPriority) : null,
+        always_double: alwaysDouble,
+        blocked_slots: blockedSlots.length > 0 ? blockedSlots : null,
+        limit_last_periods: limitLastPeriods,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
+      toast.success("מקצוע עודכן");
+      onClose();
+    },
+    onError: () => toast.error("שגיאה בעדכון מקצוע"),
+  });
+
+  const loading = createMut.isPending || updateMut.isPending;
+
+  return (
+    <Dialog open={open} onClose={onClose}>
+      <DialogHeader>
+        <DialogTitle>{subject ? "עריכת מקצוע" : "מקצוע חדש"}</DialogTitle>
+      </DialogHeader>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          subject ? updateMut.mutate() : createMut.mutate();
+        }}
+        className="space-y-4"
+      >
+        <div>
+          <Label htmlFor="subj-name">שם</Label>
+          <Input id="subj-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="לדוגמה: מתמטיקה" required />
+        </div>
+        <div>
+          <Label htmlFor="subj-color">צבע</Label>
+          <div className="flex items-center gap-3">
+            <input id="subj-color" type="color" value={color} onChange={(e) => setColor(e.target.value)} className="h-9 w-12 rounded border cursor-pointer" />
+            <span className="text-sm text-muted-foreground">{color}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <input id="subj-always-double" type="checkbox" checked={alwaysDouble} onChange={(e) => setAlwaysDouble(e.target.checked)} className="h-4 w-4 accent-primary cursor-pointer" />
+          <Label htmlFor="subj-always-double" className="cursor-pointer">הכרח כפולים</Label>
+        </div>
+        <div className="flex items-center gap-3">
+          <input id="subj-limit-last" type="checkbox" checked={limitLastPeriods} onChange={(e) => setLimitLastPeriods(e.target.checked)} className="h-4 w-4 accent-primary cursor-pointer" />
+          <Label htmlFor="subj-limit-last" className="cursor-pointer">הגבלה בשעות אחרונות</Label>
+        </div>
+        <div>
+          <Label htmlFor="subj-double-priority">עדיפות שיעורים כפולים (0–100)</Label>
+          <Input id="subj-double-priority" type="number" min={0} max={100} value={doublePriority} onChange={(e) => setDoublePriority(e.target.value)} placeholder="אוטומטי" />
+        </div>
+        <div>
+          <Label htmlFor="subj-morning-priority">חשיבות תחילת יום (0–100)</Label>
+          <Input id="subj-morning-priority" type="number" min={0} max={100} value={morningPriority} onChange={(e) => setMorningPriority(e.target.value)} placeholder="לא מוגדר" />
+        </div>
+        <div>
+          <Label>חסימת שעות למקצוע</Label>
+          <div className="flex gap-2 mb-2">
+            <Select value={blockDay} onChange={(e) => setBlockDay(e.target.value)} className="flex-1">
+              <option value="">בחר יום</option>
+              {DAYS_ORDER.map((d) => (<option key={d} value={d}>{DAY_LABELS[d]}</option>))}
+            </Select>
+            <Input type="number" min={1} max={10} placeholder="שעה" value={blockPeriod} onChange={(e) => setBlockPeriod(e.target.value)} className="w-20" />
+            <Button type="button" variant="outline" size="sm" onClick={addBlockedSlot}><Plus className="h-3.5 w-3.5" /></Button>
+          </div>
+          {blockedSlots.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {blockedSlots.sort((a, b) => DAYS_ORDER.indexOf(a.day) - DAYS_ORDER.indexOf(b.day) || a.period - b.period).map((s) => (
+                <Badge key={`${s.day}-${s.period}`} variant="secondary" className="gap-1">
+                  {DAY_LABELS[s.day]} שעה {s.period}
+                  <button type="button" onClick={() => removeBlockedSlot(s.day, s.period)} className="cursor-pointer"><X className="h-3 w-3" /></button>
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+        {subject && (
+          <InlineConstraints schoolId={schoolId} category="SUBJECT" targetId={subject.id} targetName={subject.name} />
+        )}
+        <DialogFooter>
+          <Button type="submit" disabled={loading}>{loading ? "שומר..." : subject ? "עדכן" : "צור"}</Button>
+          <Button type="button" variant="outline" onClick={onClose}>ביטול</Button>
+        </DialogFooter>
+      </form>
+    </Dialog>
+  );
+}
+
 // ─── Main Page ───────────────────────────────────────────
 export default function GroupingsPage() {
   const schoolId = useSchoolStore((s) => s.activeSchoolId);
   const qc = useQueryClient();
 
-  const [activeTab, setActiveTab] = useState<TabId>("requirements");
+  const [activeTab, setActiveTab] = useState<TabId>("subjects");
+
+  // Subjects state
+  const [subjectFormOpen, setSubjectFormOpen] = useState(false);
+  const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
+  const [deleteSubjectTarget, setDeleteSubjectTarget] = useState<{ id: number; name: string } | null>(null);
 
   // Groupings state
   const [expandedGradeId, setExpandedGradeId] = useState<number | null>(null);
@@ -1231,6 +1393,7 @@ export default function GroupingsPage() {
   const [editingReq, setEditingReq] = useState<SubjectRequirement | null>(null);
   const [reqFixedClassId, setReqFixedClassId] = useState<number | undefined>();
   const [expandedClassId, setExpandedClassId] = useState<number | null>(null);
+  const [selectedItem, setSelectedItem] = useState<{ type: "class"; id: number } | { type: "cluster"; id: number } | null>(null);
 
   const { data: clusters = [] } = useQuery({
     queryKey: ["groupingClusters", schoolId],
@@ -1272,6 +1435,16 @@ export default function GroupingsPage() {
     queryKey: ["teachers", schoolId],
     queryFn: () => fetchTeachers(schoolId!),
     enabled: !!schoolId,
+  });
+
+  const deleteSubjectMut = useMutation({
+    mutationFn: () => deleteSubject(deleteSubjectTarget!.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
+      toast.success("מקצוע נמחק");
+      setDeleteSubjectTarget(null);
+    },
+    onError: () => toast.error("שגיאה במחיקת מקצוע"),
   });
 
   const deleteClusterOrTrackMut = useMutation({
@@ -1355,6 +1528,19 @@ export default function GroupingsPage() {
     (c) => !c.cluster_type || c.cluster_type === "REGULAR",
   );
 
+  // Auto-select first class on data load
+  useEffect(() => {
+    if (selectedItem) return;
+    if (grades.length > 0 && classes.length > 0) {
+      const sorted = [...grades].sort((a, b) => a.level - b.level);
+      const firstClass = classes.find((c) => c.grade_id === sorted[0].id);
+      if (firstClass) {
+        setSelectedItem({ type: "class", id: firstClass.id });
+        setExpandedGradeId(sorted[0].id);
+      }
+    }
+  }, [grades, classes, selectedItem]);
+
   if (!schoolId) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -1400,552 +1586,397 @@ export default function GroupingsPage() {
         ))}
       </div>
 
-      {/* ── Tab: Requirements (מקצועות) ── */}
-      {activeTab === "requirements" && (
+      {/* ── Tab: Subjects (מקצועות) ── */}
+      {activeTab === "subjects" && (
         <section className="space-y-4">
-          <h2 className="text-2xl font-bold">דרישות מקצוע לפי כיתה</h2>
-          <ClassAccordion
-            grades={grades}
-            classes={classes}
-            expandedClassId={expandedClassId}
-            onToggle={(id) =>
-              setExpandedClassId(expandedClassId === id ? null : id)
-            }
-            renderClassExtra={(cls) => {
-              const classReqs = requirements.filter(
-                (r) => r.class_group_id === cls.id,
-              );
-              const reqHours = classReqs.reduce(
-                (sum, r) => sum + r.hours_per_week,
-                0,
-              );
-              const classClusters = clusters.filter((c) =>
-                c.source_class_ids.includes(cls.id),
-              );
-              const clusterTrackHours = classClusters.reduce((sum, cluster) => {
-                const clusterTracks = tracks.filter(
-                  (t) => t.cluster_id === cluster.id,
-                );
-                const maxTrackHours = clusterTracks.length > 0
-                  ? Math.max(...clusterTracks.map((t) => t.hours_per_week))
-                  : 0;
-                return sum + maxTrackHours;
-              }, 0);
-              const groupedReqHours = classReqs
-                .filter((r) => r.is_grouped)
-                .reduce((sum, r) => sum + r.hours_per_week, 0);
-              const totalHours = reqHours - groupedReqHours + clusterTrackHours;
-              if (totalHours === 0) return null;
-              return `${totalHours} שעות`;
-            }}
-            renderContent={(cls) => {
-              const classReqs = requirements.filter(
-                (r) => r.class_group_id === cls.id,
-              );
-
-              // Build virtual rows for cluster tracks serving this class
-              const classClusters = clusters.filter((c) =>
-                c.source_class_ids.includes(cls.id),
-              );
-              type ReqRow = {
-                _key: string;
-                subject_id: number;
-                teacher_id: number | null;
-                co_teacher_ids?: number[];
-                hours_per_week: number;
-                is_grouped: boolean;
-                is_external: boolean;
-                grouping_cluster_id: number | null;
-                _isTrack: boolean;
-                _trackName?: string;
-                _reqId?: number;
-              };
-              const rows: ReqRow[] = classReqs.map((r) => ({
-                _key: `req-${r.id}`,
-                subject_id: r.subject_id,
-                teacher_id: r.teacher_id,
-                co_teacher_ids: r.co_teacher_ids ?? [],
-                hours_per_week: r.hours_per_week,
-                is_grouped: r.is_grouped,
-                is_external: r.is_external,
-                grouping_cluster_id: r.grouping_cluster_id,
-                _isTrack: false,
-                _reqId: r.id,
-              }));
-              // Add tracks that don't have a linked requirement row
-              const reqIds = new Set(classReqs.map((r) => r.id));
-              for (const cluster of classClusters) {
-                for (const track of cluster.tracks) {
-                  if (track.requirement_id && reqIds.has(track.requirement_id))
-                    continue; // already shown as requirement
-                  // Only show tracks serving this class (shared or source_class match)
-                  if (
-                    track.source_class_id !== null &&
-                    track.source_class_id !== cls.id
-                  )
-                    continue;
-                  rows.push({
-                    _key: `track-${track.id}`,
-                    subject_id: cluster.subject_id,
-                    teacher_id: track.teacher_id,
-                    hours_per_week: track.hours_per_week,
-                    is_grouped: true,
-                    is_external: false,
-                    grouping_cluster_id: cluster.id,
-                    _isTrack: true,
-                    _trackName: track.name,
-                  });
-                }
-              }
-
-              return (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-medium">
-                      דרישות — {cls.name}
-                    </h3>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => openReqForm(cls.id)}
-                      disabled={subjects.length === 0}
-                    >
-                      <Plus className="h-3 w-3" />
-                      דרישה חדשה
+          <div className="flex items-center justify-between">
+            <h2 className="text-2xl font-bold">מקצועות</h2>
+            <Button size="sm" onClick={() => { setEditingSubject(null); setSubjectFormOpen(true); }}>
+              <Plus className="h-4 w-4" />
+              מקצוע חדש
+            </Button>
+          </div>
+          <DataTable
+            compact
+            keyField="id"
+            data={subjects}
+            columns={[
+              {
+                header: "צבע",
+                accessor: (s: Subject) => (
+                  <div className="h-5 w-5 rounded-full" style={{ backgroundColor: s.color ?? "#ccc" }} />
+                ),
+                className: "w-16",
+              },
+              { header: "שם", accessor: "name" as keyof Subject },
+              {
+                header: "הכרח כפולים",
+                accessor: (s: Subject) => s.always_double ? "✓" : "—",
+                className: "w-24 text-center",
+              },
+              {
+                header: "דרישות / הקבצות",
+                accessor: (s: Subject) => {
+                  const reqCount = requirements.filter((r) => r.subject_id === s.id).length;
+                  const clusterCount = clusters.filter((c) => c.subject_id === s.id).length;
+                  const parts: string[] = [];
+                  if (reqCount > 0) parts.push(`${reqCount} דרישות`);
+                  if (clusterCount > 0) parts.push(`${clusterCount} הקבצות`);
+                  return parts.length > 0 ? parts.join(", ") : "—";
+                },
+              },
+              {
+                header: "פעולות",
+                accessor: (s: Subject) => (
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setEditingSubject(s); setSubjectFormOpen(true); }}>
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setDeleteSubjectTarget({ id: s.id, name: s.name }); }}>
+                      <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
                   </div>
-                  <DataTable
-                    compact
-                    keyField="_key"
-                    data={rows}
-                    columns={[
-                      {
-                        header: "מקצוע",
-                        accessor: (r) => {
-                          const s = subjectMap[r.subject_id];
-                          return (
-                            <span className="flex items-center gap-2">
-                              {s && (
-                                <span
-                                  className="inline-block h-3 w-3 rounded-full"
-                                  style={{
-                                    backgroundColor: s.color ?? "#ccc",
-                                  }}
-                                />
-                              )}
-                              {r._isTrack ? r._trackName : (s?.name ?? r.subject_id)}
-                            </span>
-                          );
-                        },
-                      },
-                      {
-                        header: "מורה",
-                        accessor: (r) => {
-                          const primary = r.teacher_id
-                            ? teacherMap[r.teacher_id] ?? "—"
-                            : "לא הוקצה";
-                          const co = (r.co_teacher_ids ?? [])
-                            .map((id: number) => teacherMap[id])
-                            .filter(Boolean);
-                          return co.length > 0
-                            ? `${primary} + ${co.join(", ")}`
-                            : primary;
-                        },
-                      },
-                      { header: "שעות", accessor: "hours_per_week" },
-                      {
-                        header: "סוג",
-                        accessor: (r) => (
-                          <div className="flex gap-1 flex-wrap">
-                            {r.is_grouped && (
-                              <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">
-                                {clusters.find((c) => c.id === r.grouping_cluster_id)?.name ?? "הקבצה"}
-                              </span>
-                            )}
-                            {r.is_external && (
-                              <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
-                                חוץ-לימודי
-                              </span>
-                            )}
-                          </div>
-                        ),
-                      },
-                      {
-                        header: "פעולות",
-                        accessor: (r) =>
-                          r._isTrack ? null : (
-                          <div className="flex gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const orig = classReqs.find((rq) => rq.id === r._reqId);
-                                if (orig) openReqForm(cls.id, orig);
-                              }}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const sName =
-                                  subjectMap[r.subject_id]?.name ?? "מקצוע";
-                                setDeleteTarget({
-                                  type: "requirement",
-                                  id: r._reqId!,
-                                  name: `${sName} – ${cls.name}`,
-                                });
-                              }}
-                            >
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          </div>
-                        ),
-                        className: "w-24",
-                      },
-                    ]}
-                    emptyMessage="אין דרישות לכיתה זו"
-                  />
-                </div>
-              );
-            }}
+                ),
+                className: "w-24",
+              },
+            ]}
+            emptyMessage="אין מקצועות — הוסף מקצוע חדש"
           />
         </section>
       )}
 
-      {/* ── Tab: Groupings (הקבצות) ── */}
-      {activeTab === "groupings" && (
-        <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-2xl font-bold">הקבצות</h2>
-            <Button
-              size="sm"
-              onClick={() => {
-                setEditingCluster(null);
-                setClusterFormOpen(true);
-              }}
-              disabled={subjects.length === 0}
-            >
-              <Plus className="h-4 w-4" />
-              הקבצה חדשה
-            </Button>
-          </div>
-
-          <div className="space-y-2">
-            {sortedGrades.map((grade) => {
-              const gradeClusters = regularClusters.filter(
-                (c) => c.grade_id === grade.id,
-              );
-              if (gradeClusters.length === 0) return null;
-              const isGradeExpanded = expandedGradeId === grade.id;
-              return (
-                <div key={grade.id} className="rounded-md border">
-                  <div
-                    className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted/50 transition-colors"
-                    onClick={() =>
-                      setExpandedGradeId(isGradeExpanded ? null : grade.id)
-                    }
-                  >
-                    {isGradeExpanded ? (
-                      <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    )}
-                    <span className="font-medium">שכבה {grade.name}</span>
-                    <span className="text-sm text-muted-foreground">
-                      {gradeClusters.length} הקבצות
-                    </span>
-                  </div>
-                  {isGradeExpanded && (
-                    <div className="border-t px-4 py-3 space-y-2">
-                  {gradeClusters.map((cluster) => {
-                    const isClusterExpanded =
-                      expandedClusterId === cluster.id;
-                    const clusterTracks = tracks.filter(
-                      (t) => t.cluster_id === cluster.id,
-                    );
-                    const subject = subjectMap[cluster.subject_id];
-
-                    // Check if tracks represent different subjects (e.g. מגמות)
-                    const subjectByName = Object.fromEntries(
-                      subjects.map((s) => [s.name.trim(), s]),
-                    );
-                    const trackSubjects = clusterTracks
-                      .map((t) => subjectByName[t.name.trim()])
-                      .filter((s): s is Subject => !!s);
-                    const uniqueTrackSubjectIds = new Set(trackSubjects.map((s) => s.id));
-                    const isMultiSubject =
-                      uniqueTrackSubjectIds.size > 1 ||
-                      (uniqueTrackSubjectIds.size === 1 &&
-                        !uniqueTrackSubjectIds.has(cluster.subject_id));
-
-                    return (
-                      <div key={cluster.id} className="rounded-md border">
-                        <div
-                          className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted/50 transition-colors"
-                          onClick={() =>
-                            setExpandedClusterId(
-                              isClusterExpanded ? null : cluster.id,
-                            )
-                          }
+      {/* ── Tab: Requirements (דרישות) ── */}
+      {activeTab === "requirements" && (
+        <section>
+          <div className="flex gap-6" style={{ minHeight: "calc(100vh - 220px)" }}>
+            {/* ── Right: Navigation Tree ── */}
+            <div className="w-56 shrink-0 space-y-1 border-e pe-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-bold text-muted-foreground">ניווט</h3>
+                <div className="flex gap-1">
+                  <Button size="sm" variant="ghost" title="דרישה חדשה" onClick={() => openReqForm(selectedItem?.type === "class" ? selectedItem.id : undefined)}>
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+              {sortedGrades.map((grade) => {
+                const gradeClasses = classes.filter((c) => c.grade_id === grade.id);
+                const gradeClusters = regularClusters.filter((c) => c.grade_id === grade.id);
+                if (gradeClasses.length === 0 && gradeClusters.length === 0) return null;
+                const isExpanded = expandedGradeId === grade.id;
+                return (
+                  <div key={grade.id} className="mb-1">
+                    <button
+                      onClick={() => setExpandedGradeId(isExpanded ? null : grade.id)}
+                      className="w-full flex items-center gap-1 text-xs font-bold text-muted-foreground px-2 py-1.5 rounded-md hover:bg-muted transition-colors"
+                    >
+                      {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronLeft className="h-3 w-3" />}
+                      שכבה {grade.name}
+                    </button>
+                    {isExpanded && gradeClasses.map((cls) => {
+                      const isSelected = selectedItem?.type === "class" && selectedItem.id === cls.id;
+                      const classReqs = requirements.filter((r) => r.class_group_id === cls.id);
+                      const totalHours = classReqs.reduce((sum, r) => sum + r.hours_per_week, 0);
+                      return (
+                        <button
+                          key={cls.id}
+                          onClick={() => setSelectedItem({ type: "class", id: cls.id })}
+                          className={`w-full flex items-center justify-between px-3 py-1.5 rounded-md text-sm transition-colors ${
+                            isSelected
+                              ? "bg-primary/10 text-primary font-medium"
+                              : "text-foreground hover:bg-muted"
+                          }`}
                         >
-                          {isClusterExpanded ? (
-                            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                          ) : (
-                            <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          <span>{cls.name}</span>
+                          {totalHours > 0 && (
+                            <span className="text-xs text-muted-foreground">{totalHours}ש</span>
                           )}
-                          <div className="flex-1 grid grid-cols-3 gap-4 items-center text-sm">
-                            <span className="font-medium">
-                              {cluster.name}
-                            </span>
-                            {isMultiSubject ? (
-                              <span className="flex items-center gap-1 flex-wrap">
-                                {trackSubjects.map((ts, idx) => (
-                                  <span key={ts.id} className="flex items-center gap-1">
-                                    <span
-                                      className="inline-block h-2.5 w-2.5 rounded-full"
-                                      style={{ backgroundColor: ts.color ?? "#ccc" }}
-                                    />
-                                    <span className="text-xs">{ts.name}</span>
-                                    {idx < trackSubjects.length - 1 && (
-                                      <span className="text-muted-foreground">/</span>
-                                    )}
-                                  </span>
-                                ))}
-                              </span>
-                            ) : (
-                              <span className="flex items-center gap-2">
-                                {subject && (
-                                  <span
-                                    className="inline-block h-3 w-3 rounded-full"
-                                    style={{
-                                      backgroundColor:
-                                        subject.color ?? "#ccc",
-                                    }}
-                                  />
-                                )}
-                                {subject?.name ?? "—"}
-                              </span>
-                            )}
-                            <span className="text-muted-foreground">
-                              {clusterTracks.length} רמות
-                            </span>
-                          </div>
-                          <div className="flex gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setEditingCluster(cluster);
-                                setClusterFormOpen(true);
-                              }}
+                        </button>
+                      );
+                    })}
+                    {/* Clusters under this grade */}
+                    {isExpanded && gradeClusters.length > 0 && (
+                      <div className="mt-1 me-2 border-e-2 border-primary/20">
+                        {gradeClusters.map((cluster) => {
+                          const isSelected = selectedItem?.type === "cluster" && selectedItem.id === cluster.id;
+                          const subject = subjectMap[cluster.subject_id];
+                          const clusterTracks = tracks.filter((t) => t.cluster_id === cluster.id);
+                          return (
+                            <button
+                              key={cluster.id}
+                              onClick={() => setSelectedItem({ type: "cluster", id: cluster.id })}
+                              className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-colors ${
+                                isSelected
+                                  ? "bg-primary/10 text-primary font-medium"
+                                  : "text-foreground hover:bg-muted"
+                              }`}
                             >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setDeleteTarget({
-                                  type: "cluster",
-                                  id: cluster.id,
-                                  name: cluster.name,
-                                });
-                              }}
-                            >
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          </div>
-                        </div>
+                              {subject && (
+                                <span className="inline-block h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: subject.color ?? "#ccc" }} />
+                              )}
+                              <span className="truncate">{cluster.name}</span>
+                              <span className="text-xs text-muted-foreground ms-auto shrink-0">{clusterTracks.length} רמות</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {/* Add cluster button */}
+              <div className="pt-2 border-t mt-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => { setEditingCluster(null); setClusterFormOpen(true); }}
+                  disabled={subjects.length === 0}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  הקבצה חדשה
+                </Button>
+              </div>
+            </div>
 
-                        {isClusterExpanded && (
-                          <div className="border-t bg-muted/20 px-4 py-3 space-y-3">
-                            <div className="flex items-center justify-between">
-                              <h3 className="text-sm font-medium">רמות</h3>
-                              <div className="flex gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => setReqPickerCluster(cluster)}
-                                >
-                                  <Plus className="h-3 w-3" />
-                                  הוסף מדרישה
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() =>
-                                    openTrackForm(cluster, null)
-                                  }
-                                >
-                                  <Plus className="h-3 w-3" />
-                                  רמה חדשה
-                                </Button>
-                              </div>
+            {/* ── Left: Content Panel ── */}
+            <div className="flex-1 min-w-0">
+              {!selectedItem && (
+                <div className="flex items-center justify-center h-40 text-muted-foreground">
+                  בחר כיתה או הקבצה מהתפריט
+                </div>
+              )}
+
+              {/* Class content */}
+              {selectedItem?.type === "class" && (() => {
+                const cls = classes.find((c) => c.id === selectedItem.id);
+                if (!cls) return null;
+                const classReqs = requirements.filter((r) => r.class_group_id === cls.id);
+                const classClusters = clusters.filter((c) => c.source_class_ids.includes(cls.id));
+                type ReqRow = {
+                  _key: string;
+                  subject_id: number;
+                  teacher_id: number | null;
+                  co_teacher_ids?: number[];
+                  hours_per_week: number;
+                  is_grouped: boolean;
+                  is_external: boolean;
+                  grouping_cluster_id: number | null;
+                  _isTrack: boolean;
+                  _trackName?: string;
+                  _reqId?: number;
+                };
+                const rows: ReqRow[] = classReqs.map((r) => ({
+                  _key: `req-${r.id}`,
+                  subject_id: r.subject_id,
+                  teacher_id: r.teacher_id,
+                  co_teacher_ids: r.co_teacher_ids ?? [],
+                  hours_per_week: r.hours_per_week,
+                  is_grouped: r.is_grouped,
+                  is_external: r.is_external,
+                  grouping_cluster_id: r.grouping_cluster_id,
+                  _isTrack: false,
+                  _reqId: r.id,
+                }));
+                const reqIds = new Set(classReqs.map((r) => r.id));
+                for (const cluster of classClusters) {
+                  for (const track of cluster.tracks) {
+                    if (track.requirement_id && reqIds.has(track.requirement_id)) continue;
+                    if (track.source_class_id !== null && track.source_class_id !== cls.id) continue;
+                    rows.push({
+                      _key: `track-${track.id}`,
+                      subject_id: cluster.subject_id,
+                      teacher_id: track.teacher_id,
+                      hours_per_week: track.hours_per_week,
+                      is_grouped: true,
+                      is_external: false,
+                      grouping_cluster_id: cluster.id,
+                      _isTrack: true,
+                      _trackName: track.name,
+                    });
+                  }
+                }
+                return (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-xl font-bold">דרישות — {cls.name}</h2>
+                      <Button size="sm" variant="outline" onClick={() => openReqForm(cls.id)} disabled={subjects.length === 0}>
+                        <Plus className="h-3 w-3" />
+                        דרישה חדשה
+                      </Button>
+                    </div>
+                    <DataTable
+                      compact
+                      keyField="_key"
+                      data={rows}
+                      columns={[
+                        {
+                          header: "מקצוע",
+                          accessor: (r: ReqRow) => {
+                            const s = subjectMap[r.subject_id];
+                            return (
+                              <span className="flex items-center gap-2">
+                                {s && <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: s.color ?? "#ccc" }} />}
+                                {r._isTrack ? r._trackName : (s?.name ?? r.subject_id)}
+                              </span>
+                            );
+                          },
+                        },
+                        {
+                          header: "מורה",
+                          accessor: (r: ReqRow) => {
+                            const primary = r.teacher_id ? teacherMap[r.teacher_id] ?? "—" : "לא הוקצה";
+                            const co = (r.co_teacher_ids ?? []).map((id: number) => teacherMap[id]).filter(Boolean);
+                            return co.length > 0 ? `${primary} + ${co.join(", ")}` : primary;
+                          },
+                        },
+                        { header: "שעות", accessor: "hours_per_week" as keyof ReqRow },
+                        {
+                          header: "סוג",
+                          accessor: (r: ReqRow) => (
+                            <div className="flex gap-1 flex-wrap">
+                              {r.is_grouped && (
+                                <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">
+                                  {clusters.find((c) => c.id === r.grouping_cluster_id)?.name ?? "הקבצה"}
+                                </span>
+                              )}
+                              {r.is_external && (
+                                <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+                                  חוץ-לימודי
+                                </span>
+                              )}
                             </div>
-                            <DataTable
-                              compact
-                              keyField="id"
-                              data={clusterTracks}
-                              columns={[
-                                {
-                                  header: "שם רמה",
-                                  accessor: (t) => (
-                                    <span className="flex items-center gap-2">
-                                      {t.name}
-                                      {t.is_secondary && (
-                                        <Badge variant="secondary">שניה</Badge>
-                                      )}
-                                      {t.link_group != null && (
-                                        <Badge variant="outline" className="text-xs">קבוצה {t.link_group}</Badge>
-                                      )}
-                                      {t.source_class_id != null && (
-                                        <Badge variant="outline" className="text-xs text-blue-600">{classMap[t.source_class_id]?.name ?? `כיתה ${t.source_class_id}`}</Badge>
-                                      )}
-                                    </span>
-                                  ),
-                                },
-                                ...(isMultiSubject
-                                  ? [
-                                      {
-                                        header: "מקצוע",
-                                        accessor: (t: Track) => {
-                                          const ts = subjectByName[t.name.trim()];
-                                          return ts ? (
-                                            <span className="flex items-center gap-1.5">
-                                              <span
-                                                className="inline-block h-2.5 w-2.5 rounded-full"
-                                                style={{ backgroundColor: ts.color ?? "#ccc" }}
-                                              />
-                                              {ts.name}
-                                            </span>
-                                          ) : (
-                                            <span className="text-muted-foreground">—</span>
-                                          );
-                                        },
-                                      },
-                                    ]
-                                  : []),
-                                {
-                                  header: "מורה",
-                                  accessor: (t) => {
-                                    if (!t.teacher_id) return "לא הוקצה";
-                                    const teacher = teachers.find((tc) => tc.id === t.teacher_id);
-                                    if (!teacher) return "—";
-                                    return (
-                                      <span className="flex items-center gap-1.5">
-                                        {teacher.name}
-                                        {teacher.blocked_slots && teacher.blocked_slots.length > 0 && (
-                                          <Badge variant="outline" className="text-xs text-amber-600">
-                                            {teacher.blocked_slots.length} חסימות
-                                          </Badge>
-                                        )}
-                                      </span>
-                                    );
-                                  },
-                                },
-                                {
-                                  header: "שעות",
-                                  accessor: (t) => {
-                                    if (!t.teacher_id) return t.hours_per_week;
-                                    const teacher = teachers.find((tc) => tc.id === t.teacher_id);
-                                    if (!teacher) return t.hours_per_week;
-                                    return (
-                                      <span className="flex items-center gap-1.5">
-                                        {t.hours_per_week}
-                                        <span className="text-xs text-muted-foreground">
-                                          / {teacher.max_hours_per_week}
-                                        </span>
-                                      </span>
-                                    );
-                                  },
-                                },
-                                {
-                                  header: "פעולות",
-                                  accessor: (t) => (
-                                    <div className="flex gap-1">
-                                      <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        title="הוצא לדרישה"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleToRequirement(t);
-                                        }}
-                                      >
-                                        <Undo2 className="h-4 w-4 text-blue-500" />
-                                      </Button>
-                                      <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          openTrackForm(cluster, t);
-                                        }}
-                                      >
-                                        <Pencil className="h-4 w-4" />
-                                      </Button>
-                                      <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setDeleteTarget({
-                                            type: "track",
-                                            id: t.id,
-                                            name: t.name,
-                                          });
-                                        }}
-                                      >
-                                        <Trash2 className="h-4 w-4 text-destructive" />
-                                      </Button>
-                                    </div>
-                                  ),
-                                  className: "w-32",
-                                },
-                              ]}
-                              emptyMessage="אין רמות — הוסף רמה חדשה"
-                            />
-                            <div className="pt-2 border-t">
-                              <h3 className="text-sm font-medium mb-2">כיתות</h3>
-                              <div className="flex flex-wrap gap-3">
-                                {classes
-                                  .filter((cls) => cls.grade_id === cluster.grade_id)
-                                  .map((cls) => (
-                                    <label key={cls.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
-                                      <input
-                                        type="checkbox"
-                                        className="rounded"
-                                        checked={cluster.source_class_ids.includes(cls.id)}
-                                        onChange={(e) => handleClassToggle(cluster, cls.id, e.target.checked)}
-                                      />
-                                      {cls.name}
-                                    </label>
-                                  ))}
+                          ),
+                        },
+                        {
+                          header: "פעולות",
+                          accessor: (r: ReqRow) =>
+                            r._isTrack ? null : (
+                              <div className="flex gap-1">
+                                <Button variant="ghost" size="icon" onClick={(e) => {
+                                  e.stopPropagation();
+                                  const orig = classReqs.find((rq) => rq.id === r._reqId);
+                                  if (orig) openReqForm(cls.id, orig);
+                                }}><Pencil className="h-4 w-4" /></Button>
+                                <Button variant="ghost" size="icon" onClick={(e) => {
+                                  e.stopPropagation();
+                                  const sName = subjectMap[r.subject_id]?.name ?? "מקצוע";
+                                  setDeleteTarget({ type: "requirement", id: r._reqId!, name: `${sName} – ${cls.name}` });
+                                }}><Trash2 className="h-4 w-4 text-destructive" /></Button>
                               </div>
-                            </div>
-                          </div>
+                            ),
+                          className: "w-24",
+                        },
+                      ]}
+                      emptyMessage="אין דרישות לכיתה זו"
+                    />
+                  </div>
+                );
+              })()}
+
+              {/* Cluster content */}
+              {selectedItem?.type === "cluster" && (() => {
+                const cluster = clusters.find((c) => c.id === selectedItem.id);
+                if (!cluster) return null;
+                const clusterTracks = tracks.filter((t) => t.cluster_id === cluster.id);
+                const subject = subjectMap[cluster.subject_id];
+                return (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <h2 className="text-xl font-bold">{cluster.name}</h2>
+                        {subject && (
+                          <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                            <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: subject.color ?? "#ccc" }} />
+                            {subject.name}
+                          </span>
                         )}
                       </div>
-                    );
-                  })}
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline" onClick={() => { setEditingCluster(cluster); setClusterFormOpen(true); }}>
+                          <Pencil className="h-3 w-3" />
+                          עריכה
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => setReqPickerCluster(cluster)}>
+                          <Plus className="h-3 w-3" />
+                          הוסף מדרישה
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => openTrackForm(cluster, null)}>
+                          <Plus className="h-3 w-3" />
+                          רמה חדשה
+                        </Button>
+                        <Button size="sm" variant="destructive" onClick={() => setDeleteTarget({ type: "cluster", id: cluster.id, name: cluster.name })}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                    <DataTable
+                      compact
+                      keyField="id"
+                      data={clusterTracks}
+                      columns={[
+                        { header: "שם רמה", accessor: "name" as keyof Track },
+                        {
+                          header: "מורה",
+                          accessor: (t: Track) => {
+                            if (!t.teacher_id) return "לא הוקצה";
+                            const teacher = teachers.find((tc) => tc.id === t.teacher_id);
+                            if (!teacher) return "—";
+                            return (
+                              <span className="flex items-center gap-1.5">
+                                {teacher.name}
+                                {teacher.blocked_slots && teacher.blocked_slots.length > 0 && (
+                                  <Badge variant="outline" className="text-xs text-amber-600">{teacher.blocked_slots.length} חסימות</Badge>
+                                )}
+                              </span>
+                            );
+                          },
+                        },
+                        {
+                          header: "שעות",
+                          accessor: (t: Track) => {
+                            if (!t.teacher_id) return t.hours_per_week;
+                            const teacher = teachers.find((tc) => tc.id === t.teacher_id);
+                            if (!teacher) return t.hours_per_week;
+                            return (
+                              <span className="flex items-center gap-1.5">
+                                {t.hours_per_week}
+                                <span className="text-xs text-muted-foreground">/ {teacher.max_hours_per_week}</span>
+                              </span>
+                            );
+                          },
+                        },
+                        {
+                          header: "פעולות",
+                          accessor: (t: Track) => (
+                            <div className="flex gap-1">
+                              <Button variant="ghost" size="icon" title="הוצא לדרישה" onClick={(e) => { e.stopPropagation(); handleToRequirement(t); }}>
+                                <Undo2 className="h-4 w-4 text-blue-500" />
+                              </Button>
+                              <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); openTrackForm(cluster, t); }}>
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setDeleteTarget({ type: "track", id: t.id, name: t.name }); }}>
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </div>
+                          ),
+                          className: "w-32",
+                        },
+                      ]}
+                      emptyMessage="אין רמות — הוסף רמה חדשה"
+                    />
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         </section>
       )}
 
       {/* ── Tab: Shared (משותפים) ── */}
       {activeTab === "shared" && (
-        <section className="space-y-8">
+        <section className="space-y-4">
           {/* ── Shared Lessons ── */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -2134,273 +2165,6 @@ export default function GroupingsPage() {
               </div>
             )}
           </div>
-
-          {/* ── Cross-Grade Groupings ── */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-bold">הקבצות בין-שכבתיות</h2>
-              <Button
-                size="sm"
-                onClick={() => setCrossGradeFormOpen(true)}
-                disabled={subjects.length === 0}
-              >
-                <Plus className="h-4 w-4" />
-                הקבצה בין-שכבתית חדשה
-              </Button>
-            </div>
-            {crossGradeClusters.length === 0 ? (
-              <div className="rounded-md border px-4 py-8 text-center text-muted-foreground">
-                אין הקבצות בין-שכבתיות — הקבצות עם רמות שחוצות שכבות
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {crossGradeClusters.map((cluster) => {
-                  const isExpanded = expandedSharedClusterId === cluster.id;
-                  const clusterTracks = tracks.filter(
-                    (t) => t.cluster_id === cluster.id,
-                  );
-                  const subject = subjectMap[cluster.subject_id];
-                  const sourceNames = cluster.source_class_ids
-                    .map((id) => classMap[id]?.name)
-                    .filter(Boolean)
-                    .join(", ");
-
-                  // Check if tracks represent different subjects (e.g. מגמות)
-                  const cgSubjectByName = Object.fromEntries(
-                    subjects.map((s) => [s.name.trim(), s]),
-                  );
-                  const cgTrackSubjects = clusterTracks
-                    .map((t) => cgSubjectByName[t.name.trim()])
-                    .filter((s): s is Subject => !!s);
-                  const cgUniqueIds = new Set(cgTrackSubjects.map((s) => s.id));
-                  const cgIsMultiSubject =
-                    cgUniqueIds.size > 1 ||
-                    (cgUniqueIds.size === 1 && !cgUniqueIds.has(cluster.subject_id));
-
-                  return (
-                    <div key={cluster.id} className="rounded-md border">
-                      <div
-                        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted/50 transition-colors"
-                        onClick={() =>
-                          setExpandedSharedClusterId(
-                            isExpanded ? null : cluster.id,
-                          )
-                        }
-                      >
-                        {isExpanded ? (
-                          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                        ) : (
-                          <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" />
-                        )}
-                        <div className="flex-1 flex items-center gap-4 text-sm">
-                          <span className="font-medium">{cluster.name}</span>
-                          {cgIsMultiSubject ? (
-                            <span className="flex items-center gap-1 flex-wrap">
-                              {cgTrackSubjects.map((ts, idx) => (
-                                <span key={ts.id} className="flex items-center gap-1">
-                                  <span
-                                    className="inline-block h-2.5 w-2.5 rounded-full"
-                                    style={{ backgroundColor: ts.color ?? "#ccc" }}
-                                  />
-                                  <span className="text-xs">{ts.name}</span>
-                                  {idx < cgTrackSubjects.length - 1 && (
-                                    <span className="text-muted-foreground">/</span>
-                                  )}
-                                </span>
-                              ))}
-                            </span>
-                          ) : (
-                            <span className="flex items-center gap-2">
-                              {subject && (
-                                <span
-                                  className="inline-block h-3 w-3 rounded-full"
-                                  style={{
-                                    backgroundColor: subject.color ?? "#ccc",
-                                  }}
-                                />
-                              )}
-                              {subject?.name ?? "—"}
-                            </span>
-                          )}
-                          <span className="text-muted-foreground">
-                            {clusterTracks.length} רמות
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            ({sourceNames})
-                          </span>
-                        </div>
-                        <div className="flex gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDeleteTarget({
-                                type: "cluster",
-                                id: cluster.id,
-                                name: cluster.name,
-                              });
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </div>
-                      </div>
-
-                      {isExpanded && (
-                        <div className="border-t bg-muted/20 px-4 py-3 space-y-3">
-                          <div className="flex items-center justify-between">
-                            <h3 className="text-sm font-medium">רמות</h3>
-                            <div className="flex gap-2">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => setReqPickerCluster(cluster)}
-                              >
-                                <Plus className="h-3 w-3" />
-                                הוסף מדרישה
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => openTrackForm(cluster, null)}
-                              >
-                                <Plus className="h-3 w-3" />
-                                רמה חדשה
-                              </Button>
-                            </div>
-                          </div>
-                          <DataTable
-                            compact
-                            keyField="id"
-                            data={clusterTracks}
-                            columns={[
-                              { header: "שם רמה", accessor: "name" },
-                              ...(cgIsMultiSubject
-                                ? [
-                                    {
-                                      header: "מקצוע",
-                                      accessor: (t: Track) => {
-                                        const ts = cgSubjectByName[t.name.trim()];
-                                        return ts ? (
-                                          <span className="flex items-center gap-1.5">
-                                            <span
-                                              className="inline-block h-2.5 w-2.5 rounded-full"
-                                              style={{ backgroundColor: ts.color ?? "#ccc" }}
-                                            />
-                                            {ts.name}
-                                          </span>
-                                        ) : (
-                                          <span className="text-muted-foreground">—</span>
-                                        );
-                                      },
-                                    },
-                                  ]
-                                : []),
-                              {
-                                header: "מורה",
-                                accessor: (t) => {
-                                  if (!t.teacher_id) return "לא הוקצה";
-                                  const teacher = teachers.find((tc) => tc.id === t.teacher_id);
-                                  if (!teacher) return "—";
-                                  return (
-                                    <span className="flex items-center gap-1.5">
-                                      {teacher.name}
-                                      {teacher.blocked_slots && teacher.blocked_slots.length > 0 && (
-                                        <Badge variant="outline" className="text-xs text-amber-600">
-                                          {teacher.blocked_slots.length} חסימות
-                                        </Badge>
-                                      )}
-                                    </span>
-                                  );
-                                },
-                              },
-                              {
-                                header: "שעות",
-                                accessor: (t) => {
-                                  if (!t.teacher_id) return t.hours_per_week;
-                                  const teacher = teachers.find((tc) => tc.id === t.teacher_id);
-                                  if (!teacher) return t.hours_per_week;
-                                  return (
-                                    <span className="flex items-center gap-1.5">
-                                      {t.hours_per_week}
-                                      <span className="text-xs text-muted-foreground">
-                                        / {teacher.max_hours_per_week}
-                                      </span>
-                                    </span>
-                                  );
-                                },
-                              },
-                              {
-                                header: "פעולות",
-                                accessor: (t) => (
-                                  <div className="flex gap-1">
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      title="הוצא לדרישה"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleToRequirement(t);
-                                      }}
-                                    >
-                                      <Undo2 className="h-4 w-4 text-blue-500" />
-                                    </Button>
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        openTrackForm(cluster, t);
-                                      }}
-                                    >
-                                      <Pencil className="h-4 w-4" />
-                                    </Button>
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setDeleteTarget({
-                                          type: "track",
-                                          id: t.id,
-                                          name: t.name,
-                                        });
-                                      }}
-                                    >
-                                      <Trash2 className="h-4 w-4 text-destructive" />
-                                    </Button>
-                                  </div>
-                                ),
-                                className: "w-32",
-                              },
-                            ]}
-                            emptyMessage="אין רמות — הוסף רמה חדשה"
-                          />
-                          <div className="pt-2 border-t">
-                            <h3 className="text-sm font-medium mb-2">כיתות</h3>
-                            <div className="flex flex-wrap gap-3">
-                              {classes.map((cls) => (
-                                <label key={cls.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
-                                  <input
-                                    type="checkbox"
-                                    className="rounded"
-                                    checked={cluster.source_class_ids.includes(cls.id)}
-                                    onChange={(e) => handleClassToggle(cluster, cls.id, e.target.checked)}
-                                  />
-                                  {cls.name}
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
         </section>
       )}
 
@@ -2469,20 +2233,23 @@ export default function GroupingsPage() {
         />
       )}
 
-      {crossGradeFormOpen && (
-        <CrossGradeFormDialog
-          open={crossGradeFormOpen}
-          onClose={() => setCrossGradeFormOpen(false)}
-          onSaved={(clusterId) => {
-            setCrossGradeFormOpen(false);
-            setExpandedSharedClusterId(clusterId);
-          }}
+      {subjectFormOpen && (
+        <SubjectFormDialog
+          open={subjectFormOpen}
+          onClose={() => setSubjectFormOpen(false)}
+          subject={editingSubject}
           schoolId={schoolId}
-          subjects={subjects}
-          grades={grades}
-          classes={classes}
         />
       )}
+
+      <ConfirmDialog
+        open={!!deleteSubjectTarget}
+        onClose={() => setDeleteSubjectTarget(null)}
+        onConfirm={() => deleteSubjectMut.mutate()}
+        title="אישור מחיקה"
+        message={`האם למחוק את "${deleteSubjectTarget?.name}"? פעולה זו לא ניתנת לביטול.`}
+        loading={deleteSubjectMut.isPending}
+      />
 
       {reqPickerCluster && (
         <RequirementPickerDialog

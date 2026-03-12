@@ -1,0 +1,31 @@
+# Render Blueprint — single web service + PostgreSQL
+# https://docs.render.com/blueprint-spec
+
+databases:
+  - name: flycal-db
+    plan: free
+    databaseName: flycal
+    user: flycal
+
+services:
+  - type: web
+    name: flycal
+    runtime: python
+    plan: free
+    buildCommand: bash build.sh
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: flycal-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: "false"
+      - key: CORS_ORIGINS
+        value: '["https://flycal.onrender.com","https://flycal-*.onrender.com"]'
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      - key: NODE_VERSION
+        value: "20.11.0"

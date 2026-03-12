@@ -2,11 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_current_user
 from app.models.subject import Subject
 from app.models.teacher import Teacher
 from app.schemas.teacher import TeacherCreate, TeacherRead, TeacherUpdate
 
-router = APIRouter(prefix="/api/teachers", tags=["teachers"])
+router = APIRouter(prefix="/api/teachers", tags=["teachers"], dependencies=[Depends(get_current_user)])
 
 
 def _teacher_to_read(teacher: Teacher) -> TeacherRead:

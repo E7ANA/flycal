@@ -19,3 +19,4 @@ from app.models.constraint import (  # noqa: F401
 )
 from app.models.timetable import ScheduledLesson, ScheduledMeeting, Solution, SolutionStatus  # noqa: F401
 from app.models.meeting import Meeting, MeetingType, meeting_teachers  # noqa: F401
+from app.models.user import User, UserRole  # noqa: F401

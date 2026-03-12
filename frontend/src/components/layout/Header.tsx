@@ -1,8 +1,10 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { LogOut, Plus } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
+import { useAuthStore } from "@/stores/authStore";
 import { useSchools } from "@/hooks/useSchool";
 import { createSchool } from "@/api/schools";
 import { Button } from "@/components/common/Button";
@@ -17,11 +19,16 @@ import {
 
 export function Header() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const { data: schools } = useSchools();
   const activeSchoolId = useSchoolStore((s) => s.activeSchoolId);
   const setActiveSchoolId = useSchoolStore((s) => s.setActiveSchoolId);
+  const user = useAuthStore((s) => s.user);
+  const logout = useAuthStore((s) => s.logout);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [schoolName, setSchoolName] = useState("");
+
+  const isSuperAdmin = user?.role === "SUPER_ADMIN";
 
   const createMut = useMutation({
     mutationFn: () =>
@@ -44,33 +51,55 @@ export function Header() {
     onError: () => toast.error("שגיאה ביצירת בית ספר"),
   });
 
+  const handleLogout = () => {
+    logout();
+    navigate("/login", { replace: true });
+  };
+
   return (
     <>
       <header className="h-14 border-b bg-card flex items-center px-6 gap-4">
         <div className="flex items-center gap-3 me-auto">
           <label className="text-sm text-muted-foreground">בית ספר:</label>
-          <select
-            className="rounded-md border bg-background px-3 py-1.5 text-sm"
-            value={activeSchoolId ?? ""}
-            onChange={(e) => {
-              const val = e.target.value;
-              setActiveSchoolId(val ? Number(val) : null);
-            }}
-          >
-            <option value="">בחר בית ספר</option>
-            {schools?.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setDialogOpen(true)}
-          >
-            <Plus className="h-4 w-4" />
-            חדש
+          {isSuperAdmin ? (
+            <select
+              className="rounded-md border bg-background px-3 py-1.5 text-sm"
+              value={activeSchoolId ?? ""}
+              onChange={(e) => {
+                const val = e.target.value;
+                setActiveSchoolId(val ? Number(val) : null);
+              }}
+            >
+              <option value="">בחר בית ספר</option>
+              {schools?.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="text-sm font-medium">
+              {schools?.find((s) => s.id === activeSchoolId)?.name ?? "—"}
+            </span>
+          )}
+          {isSuperAdmin && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDialogOpen(true)}
+            >
+              <Plus className="h-4 w-4" />
+              חדש
+            </Button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-muted-foreground">
+            {user?.name}
+          </span>
+          <Button variant="ghost" size="sm" onClick={handleLogout}>
+            <LogOut className="h-4 w-4" />
           </Button>
         </div>
       </header>

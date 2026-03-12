@@ -7,6 +7,7 @@ __pycache__/
 *.pyo
 *.db
 .env
+.env.local
 *.egg-info/
 dist/
 build/

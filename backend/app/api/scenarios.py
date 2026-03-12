@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
 from app.database import get_db, SessionLocal
+from app.dependencies import get_current_user, require_super_admin
 from app.solver.scenario_engine import (
     compare_solutions,
     run_scenario_change_type,
@@ -17,7 +18,7 @@ from app.solver.scenario_engine import (
 
 log = logging.getLogger("scenarios")
 
-router = APIRouter(prefix="/api/scenarios", tags=["scenarios"])
+router = APIRouter(prefix="/api/scenarios", tags=["scenarios"], dependencies=[Depends(require_super_admin)])
 
 
 class ToggleScenarioRequest(BaseModel):

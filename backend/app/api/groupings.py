@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_current_user
 from app.models.class_group import ClassGroup, ClusterType, Grade, GroupingCluster, Track
 from app.models.subject import Subject, SubjectRequirement
 from app.models.teacher import Teacher
@@ -18,7 +19,7 @@ from app.schemas.grouping import (
     TrackUpdate,
 )
 
-router = APIRouter(prefix="/api/grouping-clusters", tags=["grouping-clusters"])
+router = APIRouter(prefix="/api/grouping-clusters", tags=["grouping-clusters"], dependencies=[Depends(get_current_user)])
 
 
 def _cluster_to_read(cluster: GroupingCluster) -> GroupingClusterRead:
@@ -211,7 +212,7 @@ def delete_cluster(cluster_id: int, db: Session = Depends(get_db)):
 
 # --- Track CRUD ---
 
-track_router = APIRouter(prefix="/api/tracks", tags=["tracks"])
+track_router = APIRouter(prefix="/api/tracks", tags=["tracks"], dependencies=[Depends(get_current_user)])
 
 
 @track_router.post("", response_model=TrackRead, status_code=201)

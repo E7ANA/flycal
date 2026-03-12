@@ -2,10 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_current_user
 from app.models.class_group import Grade
 from app.schemas.grade import GradeCreate, GradeRead, GradeUpdate
 
-router = APIRouter(prefix="/api/grades", tags=["grades"])
+router = APIRouter(prefix="/api/grades", tags=["grades"], dependencies=[Depends(get_current_user)])
 
 
 @router.post("", response_model=GradeRead, status_code=201)

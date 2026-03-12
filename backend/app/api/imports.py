@@ -7,11 +7,12 @@ from openpyxl import load_workbook
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_current_user
 from app.models.class_group import ClassGroup, Grade
 from app.models.subject import Subject, SubjectRequirement
 from app.models.teacher import Teacher
 
-router = APIRouter(prefix="/api/import", tags=["import"])
+router = APIRouter(prefix="/api/import", tags=["import"], dependencies=[Depends(get_current_user)])
 
 
 @router.post("/teachers")

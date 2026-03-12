@@ -327,7 +327,7 @@ def _compile_block_timeslot(
     is_hard = constraint.type == ConstraintType.HARD
 
     if constraint.category == "TEACHER" and target_id:
-        slot_vars = _vars_for_teacher(variables, data, target_id)
+        slot_vars = _vars_for_teacher_with_meetings(variables, data, target_id)
         blocked = slot_vars.get((day, period), [])
     elif constraint.category == "CLASS" and target_id:
         slot_vars = _vars_for_class(variables, data, target_id)
@@ -360,7 +360,7 @@ def _compile_block_day(
     is_hard = constraint.type == ConstraintType.HARD
 
     if constraint.category == "TEACHER" and target_id:
-        by_day = _vars_for_teacher_by_day(variables, data, target_id)
+        by_day = _vars_for_teacher_by_day(variables, data, target_id, include_meetings=True)
         day_vars = by_day.get(day, [])
     elif constraint.category == "CLASS" and target_id:
         slot_vars = _vars_for_class(variables, data, target_id)
@@ -396,7 +396,7 @@ def _compile_block_time_range(
     is_hard = constraint.type == ConstraintType.HARD
 
     if constraint.category == "TEACHER" and target_id:
-        slot_vars = _vars_for_teacher(variables, data, target_id)
+        slot_vars = _vars_for_teacher_with_meetings(variables, data, target_id)
     elif constraint.category == "CLASS" and target_id:
         slot_vars = _vars_for_class(variables, data, target_id)
     else:

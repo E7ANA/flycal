@@ -2,10 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_current_user
 from app.models.class_group import ClassGroup
 from app.schemas.class_group import ClassGroupCreate, ClassGroupRead, ClassGroupUpdate
 
-router = APIRouter(prefix="/api/classes", tags=["classes"])
+router = APIRouter(prefix="/api/classes", tags=["classes"], dependencies=[Depends(get_current_user)])
 
 
 @router.post("", response_model=ClassGroupRead, status_code=201)

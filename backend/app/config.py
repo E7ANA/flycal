@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,8 +26,15 @@ class Settings(BaseSettings):
     # AI
     anthropic_api_key: str = ""
 
-    # CORS
+    # Auth
+    secret_key: str = "change-me-in-production-use-a-real-secret-key"
+
+    # CORS — allow Render domain + localhost
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+
+    @property
+    def is_production(self) -> bool:
+        return "RENDER" in os.environ
 
 
 settings = Settings()

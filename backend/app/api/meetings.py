@@ -2,12 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_current_user
 from app.models.meeting import Meeting, MeetingType
 from app.models.teacher import Teacher
 from app.models.timeslot import TimeSlot
 from app.schemas.meeting import MeetingCreate, MeetingRead, MeetingUpdate
 
-router = APIRouter(prefix="/api/meetings", tags=["meetings"])
+router = APIRouter(prefix="/api/meetings", tags=["meetings"], dependencies=[Depends(get_current_user)])
 
 
 def _meeting_to_read(meeting: Meeting) -> MeetingRead:

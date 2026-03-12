@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_current_user
 from app.models.class_group import ClassGroup
 from app.models.subject import Subject, SubjectRequirement
 from app.models.teacher import Teacher
@@ -15,7 +16,7 @@ from app.schemas.subject import (
     SubjectUpdate,
 )
 
-router = APIRouter(prefix="/api/subjects", tags=["subjects"])
+router = APIRouter(prefix="/api/subjects", tags=["subjects"], dependencies=[Depends(get_current_user)])
 
 
 # --- Subject CRUD ---
@@ -71,7 +72,7 @@ def delete_subject(subject_id: int, db: Session = Depends(get_db)):
 
 # --- SubjectRequirement CRUD ---
 
-req_router = APIRouter(prefix="/api/subject-requirements", tags=["subject-requirements"])
+req_router = APIRouter(prefix="/api/subject-requirements", tags=["subject-requirements"], dependencies=[Depends(get_current_user)])
 
 
 @req_router.post("", response_model=SubjectRequirementRead, status_code=201)
