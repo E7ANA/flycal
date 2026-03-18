@@ -35,21 +35,8 @@ import type {
 } from "@/types/models";
 
 const TEACHER_RULES: { value: RuleType; label: string }[] = [
-  { value: "BLOCK_DAY", label: "חסימת יום" },
-  { value: "BLOCK_TIMESLOT", label: "חסימת משבצת" },
-  { value: "BLOCK_TIME_RANGE", label: "חסימת טווח שעות" },
-  { value: "MAX_TEACHING_HOURS_PER_DAY", label: "מקסימום שעות הוראה ליום" },
-  { value: "MIN_TEACHING_HOURS_PER_DAY", label: "מינימום שעות הוראה ליום" },
-  { value: "MAX_TEACHING_DAYS", label: "מקסימום ימי הוראה" },
-  { value: "MIN_FREE_DAYS", label: "מינימום ימים חופשיים" },
-  { value: "BALANCED_DAILY_LOAD", label: "עומס יומי מאוזן" },
-  { value: "NO_GAPS", label: "ללא חלונות" },
-  { value: "MAX_GAPS_PER_DAY", label: "מקסימום חלונות ליום" },
-  { value: "MAX_GAPS_PER_WEEK", label: "מקסימום חלונות בשבוע" },
-  { value: "PREFER_TIME_RANGE", label: "העדפת טווח שעות" },
-  { value: "PREFER_TIMESLOT", label: "העדפת משבצת" },
-  { value: "AVOID_LAST_PERIOD", label: "הימנעות משעה אחרונה" },
-  { value: "TEACHER_FIRST_LAST_PREFERENCE", label: "העדפת שעה ראשונה/אחרונה" },
+  { value: "TEACHER_DAY_END_LIMIT", label: "מגבלת סיום יום" },
+  { value: "TEACHER_PREFERRED_FREE_DAY", label: "בחירת יום חופשי" },
 ];
 
 const SUBJECT_RULES: { value: RuleType; label: string }[] = [
@@ -597,6 +584,41 @@ function ParameterFields({
         </div>
       );
 
+    case "TEACHER_DAY_END_LIMIT":
+      return (
+        <>
+          {numberInput("num_days", "כמה ימים", 1)}
+          {numberInput("end_period", "לסיים עד שעה", 1)}
+        </>
+      );
+
+    case "TEACHER_PREFERRED_FREE_DAY": {
+      const selected = ((params["preferred_days"] as string[]) ?? []);
+      return (
+        <div>
+          <Label className="text-xs">ימים אפשריים לחופשי</Label>
+          <div className="flex flex-wrap gap-2 mt-1">
+            {DAYS_ORDER.map((d) => (
+              <label key={d} className="flex items-center gap-1 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selected.includes(d)}
+                  onChange={(e) => {
+                    const next = e.target.checked
+                      ? [...selected, d]
+                      : selected.filter((x: string) => x !== d);
+                    setParam("preferred_days", next);
+                  }}
+                  className="h-3.5 w-3.5 accent-primary"
+                />
+                {DAY_LABELS[d]}
+              </label>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     default:
       return null;
   }
@@ -617,5 +639,8 @@ function formatParams(c: Constraint): string {
   if (p.max_days) parts.push(`${p.max_days} ימים`);
   if (p.min_days) parts.push(`${p.min_days} ימים`);
   if (p.consecutive_count) parts.push(`${p.consecutive_count} רצופות`);
+  if (p.num_days && p.end_period) parts.push(`${p.num_days} ימים לסיים עד שעה ${p.end_period}`);
+  if (p.preferred_days && Array.isArray(p.preferred_days))
+    parts.push((p.preferred_days as string[]).map((d) => DAY_LABELS[d] ?? d).join(", "));
   return parts.join(" | ") || "—";
 }

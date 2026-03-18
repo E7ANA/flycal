@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Pencil, Trash2, X, Calendar } from "lucide-react";
@@ -12,6 +12,8 @@ import {
   fetchRequirements,
 } from "@/api/subjects";
 import { fetchGroupingClusters } from "@/api/groupings";
+import { fetchClasses } from "@/api/classes";
+import { fetchGrades } from "@/api/grades";
 import { Button } from "@/components/common/Button";
 import { DataTable } from "@/components/common/DataTable";
 import {
@@ -27,6 +29,7 @@ import { Select } from "@/components/common/Select";
 import { Badge } from "@/components/common/Badge";
 import { InlineConstraints } from "@/components/common/InlineConstraints";
 import { DAY_LABELS, DAYS_ORDER } from "@/lib/constraints";
+import { computeAllClassHours } from "@/lib/classHours";
 import type { Subject, BlockedSlot } from "@/types/models";
 
 // ─── Subject Form ────────────────────────────────────────
@@ -319,6 +322,85 @@ export default function SubjectsPage() {
     enabled: !!schoolId,
   });
 
+  const { data: classes = [] } = useQuery({
+    queryKey: ["classes", schoolId],
+    queryFn: () => fetchClasses(schoolId!),
+    enabled: !!schoolId,
+  });
+
+  const { data: grades = [] } = useQuery({
+    queryKey: ["grades", schoolId],
+    queryFn: () => fetchGrades(schoolId!),
+    enabled: !!schoolId,
+  });
+
+  // Build grade-sorted list and class-to-grade map
+  const sortedGrades = [...grades].sort((a, b) => a.level - b.level);
+  const classToGrade: Record<number, number> = {};
+  for (const c of classes) classToGrade[c.id] = c.grade_id;
+
+  // Build cluster type map
+  const clusterTypeMap: Record<number, string> = {};
+  for (const c of clusters) clusterTypeMap[c.id] = c.cluster_type;
+
+  // Build per-subject hours by grade — deduplicate grouped by (class, cluster),
+  // taking MAX hours per (subject, class, cluster) since tracks are synced.
+  const { subjectGradeHours, subjectTotalHours } = useMemo(() => {
+    // Pass 1: collect max hours per (subject, class, cluster) for grouped reqs
+    const groupedMax: Record<string, { subjectId: number; classId: number; hours: number }> = {};
+    const regularBySubjectGrade: Record<number, Record<number, number>> = {};
+    const regularBySubjectTotal: Record<number, number> = {};
+
+    for (const r of requirements) {
+      if (r.is_grouped && r.grouping_cluster_id) {
+        const key = `${r.subject_id}:${r.class_group_id}:${r.grouping_cluster_id}`;
+        const existing = groupedMax[key];
+        if (!existing || r.hours_per_week > existing.hours) {
+          groupedMax[key] = { subjectId: r.subject_id, classId: r.class_group_id, hours: r.hours_per_week };
+        }
+      } else {
+        if (!regularBySubjectGrade[r.subject_id]) regularBySubjectGrade[r.subject_id] = {};
+        if (!regularBySubjectTotal[r.subject_id]) regularBySubjectTotal[r.subject_id] = 0;
+        const gradeId = classToGrade[r.class_group_id];
+        if (gradeId != null) {
+          regularBySubjectGrade[r.subject_id][gradeId] =
+            (regularBySubjectGrade[r.subject_id][gradeId] ?? 0) + r.hours_per_week;
+        }
+        regularBySubjectTotal[r.subject_id] += r.hours_per_week;
+      }
+    }
+
+    // Pass 2: merge grouped max hours into grade/total maps
+    const gradeHours = { ...regularBySubjectGrade };
+    const totalHours = { ...regularBySubjectTotal };
+
+    for (const { subjectId, classId, hours } of Object.values(groupedMax)) {
+      if (!gradeHours[subjectId]) gradeHours[subjectId] = {};
+      if (!totalHours[subjectId]) totalHours[subjectId] = 0;
+      const gradeId = classToGrade[classId];
+      if (gradeId != null) {
+        gradeHours[subjectId][gradeId] = (gradeHours[subjectId][gradeId] ?? 0) + hours;
+      }
+      totalHours[subjectId] += hours;
+    }
+
+    return { subjectGradeHours: gradeHours, subjectTotalHours: totalHours };
+  }, [requirements, classToGrade]);
+
+  // Class hours summary (for requirements section)
+  const classHoursSummary = useMemo(
+    () => computeAllClassHours(requirements, clusters),
+    [requirements, clusters],
+  );
+
+  const toggleDoubleMut = useMutation({
+    mutationFn: ({ id, value }: { id: number; value: boolean }) =>
+      updateSubject(id, { always_double: value }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
+    },
+  });
+
   const deleteMut = useMutation({
     mutationFn: () => deleteSubject(deleteTarget!.id),
     onSuccess: () => {
@@ -356,6 +438,8 @@ export default function SubjectsPage() {
         </div>
         <DataTable
           compact
+          searchable
+          searchPlaceholder="חיפוש מקצוע..."
           keyField="id"
           data={subjects}
           columns={[
@@ -367,59 +451,57 @@ export default function SubjectsPage() {
                   style={{ backgroundColor: s.color ?? "#ccc" }}
                 />
               ),
-              className: "w-16",
+              className: "w-12",
             },
             { header: "שם", accessor: "name" },
             {
-              header: "הכרח כפולים",
-              accessor: (s) =>
-                s.always_double ? "✓" : "—",
-              className: "w-24 text-center",
-            },
-            {
-              header: "הגבלת אחרונות",
-              accessor: (s) =>
-                s.limit_last_periods ? "✓" : "—",
-              className: "w-28 text-center",
-            },
-            {
-              header: "עדיפות כפולים",
-              accessor: (s) =>
-                s.double_priority != null
-                  ? String(s.double_priority)
-                  : "אוטומטי",
-              className: "w-28",
-            },
-            {
-              header: "חשיבות בוקר",
-              accessor: (s) =>
-                s.morning_priority != null
-                  ? String(s.morning_priority)
-                  : "—",
-              className: "w-28",
-            },
-            {
-              header: "חסימות",
-              accessor: (s) =>
-                s.blocked_slots && s.blocked_slots.length > 0
-                  ? `${s.blocked_slots.length} חסימות`
-                  : "—",
-              className: "w-24",
-            },
-            {
-              header: "דרישות / הקבצות",
+              header: "סה״כ",
               accessor: (s) => {
-                const reqCount = requirements.filter(
-                  (r) => r.subject_id === s.id,
-                ).length;
-                const clusterCount = clusters.filter(
-                  (c) => c.subject_id === s.id,
-                ).length;
-                const parts: string[] = [];
-                if (reqCount > 0) parts.push(`${reqCount} דרישות`);
-                if (clusterCount > 0) parts.push(`${clusterCount} הקבצות`);
-                return parts.length > 0 ? parts.join(", ") : "—";
+                const total = subjectTotalHours[s.id];
+                return total ? (
+                  <span className="font-medium">{total}</span>
+                ) : "—";
               },
+              className: "w-16 text-center",
+            },
+            ...sortedGrades.map((g) => ({
+              header: g.name,
+              accessor: (s: Subject) => {
+                const hours = subjectGradeHours[s.id]?.[g.id];
+                return hours ? String(hours) : "";
+              },
+              className: "w-16 text-center",
+            })),
+            {
+              header: "כפולים",
+              accessor: (s: Subject) => {
+                return s.always_double ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleDoubleMut.mutate({ id: s.id, value: false });
+                    }}
+                    className="text-green-600 font-bold cursor-pointer hover:opacity-70"
+                    title="לחץ לביטול כפולים"
+                  >
+                    ✓
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleDoubleMut.mutate({ id: s.id, value: true });
+                    }}
+                    className="text-muted-foreground cursor-pointer hover:text-green-600"
+                    title="לחץ להפעלת כפולים"
+                  >
+                    —
+                  </button>
+                );
+              },
+              className: "w-16 text-center",
             },
             {
               header: "פעולות",
@@ -463,7 +545,7 @@ export default function SubjectsPage() {
                   </Button>
                 </div>
               ),
-              className: "w-32",
+              className: "w-28",
             },
           ]}
           emptyMessage="אין מקצועות — הוסף מקצוע חדש"

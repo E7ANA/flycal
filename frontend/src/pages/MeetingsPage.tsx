@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, RefreshCw, RotateCcw, Calendar, Lock, LockOpen } from "lucide-react";
+import { Plus, Pencil, Trash2, RefreshCw, RotateCcw, Calendar, Lock, LockOpen, Users } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import {
@@ -12,6 +12,7 @@ import {
   refreshMeetingTeachers,
 } from "@/api/meetings";
 import { fetchTeachers } from "@/api/teachers";
+import { fetchSchool, updateSchool } from "@/api/schools";
 import { PinGrid } from "@/components/common/PinGrid";
 import { fetchMeetingAvailableSlots } from "@/api/meetings";
 import { Button } from "@/components/common/Button";
@@ -33,6 +34,7 @@ const MEETING_TYPE_LABELS: Record<MeetingType, string> = {
   COORDINATORS: "רכזים",
   MANAGEMENT: "ניהול",
   CUSTOM: "מותאם אישית",
+  PLENARY: "מליאה",
 };
 
 const MEETING_TYPE_OPTIONS: { value: MeetingType; label: string }[] = [
@@ -461,6 +463,385 @@ function MeetingFormDialog({
   );
 }
 
+// ─── Plenary Form Dialog ────────────────────────────────
+function PlenaryFormDialog({
+  open,
+  onClose,
+  meeting,
+  schoolId,
+}: {
+  open: boolean;
+  onClose: () => void;
+  meeting: Meeting | null;
+  schoolId: number;
+}) {
+  const qc = useQueryClient();
+  const { data: teachers = [] } = useQuery({
+    queryKey: ["teachers", schoolId],
+    queryFn: () => fetchTeachers(schoolId),
+  });
+
+  const [name, setName] = useState(meeting?.name ?? "מליאה");
+  const [hoursPerWeek, setHoursPerWeek] = useState(
+    meeting?.hours_per_week ?? 1,
+  );
+  const [color, setColor] = useState(meeting?.color ?? "#DC2626");
+  const [pinnedSlots, setPinnedSlots] = useState<{ day: string; period: number }[]>(
+    meeting?.pinned_slots ?? [],
+  );
+  const [blockedSlots, setBlockedSlots] = useState<{ day: string; period: number }[]>(
+    meeting?.blocked_slots ?? [],
+  );
+  const [alternativeSlots, setAlternativeSlots] = useState<{ day: string; period: number }[]>(
+    meeting?.alternative_slots ?? [],
+  );
+  const [requireConsecutive, setRequireConsecutive] = useState(
+    meeting?.require_consecutive ?? false,
+  );
+  const [selectedTeacherIds, setSelectedTeacherIds] = useState<number[]>(
+    meeting?.teacher_ids ?? [],
+  );
+  // For plenary: locked = mandatory attendance, unlocked = preferred attendance
+  const [lockedTeacherIds, setLockedTeacherIds] = useState<number[]>(() => {
+    if (meeting?.locked_teacher_ids?.length) return meeting.locked_teacher_ids;
+    // New plenary: all teachers mandatory by default
+    if (!meeting) return selectedTeacherIds;
+    return meeting.teacher_ids ?? [];
+  });
+
+  const createMut = useMutation({
+    mutationFn: () =>
+      createMeeting({
+        school_id: schoolId,
+        name,
+        meeting_type: "PLENARY",
+        hours_per_week: hoursPerWeek,
+        is_active: true,
+        color,
+        teacher_ids: selectedTeacherIds,
+        pinned_slots: pinnedSlots.length > 0 ? pinnedSlots : null,
+        blocked_slots: blockedSlots.length > 0 ? blockedSlots : null,
+        alternative_slots: alternativeSlots.length > 0 ? alternativeSlots : null,
+        require_consecutive: requireConsecutive,
+        // Plenary is non-mandatory so the per-teacher model kicks in
+        is_mandatory_attendance: false,
+        locked_teacher_ids: lockedTeacherIds.length > 0 ? lockedTeacherIds : null,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["meetings", schoolId] });
+      toast.success("ישיבת מליאה נוספה בהצלחה");
+      onClose();
+    },
+    onError: () => toast.error("שגיאה בהוספת ישיבת מליאה"),
+  });
+
+  const updateMut = useMutation({
+    mutationFn: () =>
+      updateMeeting(meeting!.id, {
+        name,
+        meeting_type: "PLENARY",
+        hours_per_week: hoursPerWeek,
+        color,
+        teacher_ids: selectedTeacherIds,
+        pinned_slots: pinnedSlots.length > 0 ? pinnedSlots : null,
+        blocked_slots: blockedSlots.length > 0 ? blockedSlots : null,
+        alternative_slots: alternativeSlots.length > 0 ? alternativeSlots : null,
+        require_consecutive: requireConsecutive,
+        is_mandatory_attendance: false,
+        locked_teacher_ids: lockedTeacherIds.length > 0 ? lockedTeacherIds : null,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["meetings", schoolId] });
+      toast.success("ישיבת מליאה עודכנה");
+      onClose();
+    },
+    onError: () => toast.error("שגיאה בעדכון ישיבת מליאה"),
+  });
+
+  const loading = createMut.isPending || updateMut.isPending;
+
+  const toggleTeacher = (tid: number) => {
+    setSelectedTeacherIds((prev) => {
+      const removing = prev.includes(tid);
+      if (removing) {
+        setLockedTeacherIds((lk) => lk.filter((id) => id !== tid));
+        return prev.filter((id) => id !== tid);
+      }
+      // New teacher added — mandatory by default
+      setLockedTeacherIds((lk) => [...lk, tid]);
+      return [...prev, tid];
+    });
+  };
+
+  const toggleAttendance = (tid: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setLockedTeacherIds((prev) =>
+      prev.includes(tid) ? prev.filter((id) => id !== tid) : [...prev, tid],
+    );
+  };
+
+  const toggleRole = (role: string) => {
+    const roleIds = getTeachersByRole(teachers, role);
+    if (roleIds.length === 0) return;
+    const allSelected = roleIds.every((id) =>
+      selectedTeacherIds.includes(id),
+    );
+    if (allSelected) {
+      setSelectedTeacherIds((prev) =>
+        prev.filter((id) => !roleIds.includes(id)),
+      );
+      setLockedTeacherIds((prev) =>
+        prev.filter((id) => !roleIds.includes(id)),
+      );
+    } else {
+      const newIds = roleIds.filter((id) => !selectedTeacherIds.includes(id));
+      setSelectedTeacherIds((prev) => [...new Set([...prev, ...roleIds])]);
+      // New teachers are mandatory by default
+      setLockedTeacherIds((prev) => [...new Set([...prev, ...newIds])]);
+    }
+  };
+
+  const isRoleFullySelected = (role: string) => {
+    const roleIds = getTeachersByRole(teachers, role);
+    return roleIds.length > 0 && roleIds.every((id) => selectedTeacherIds.includes(id));
+  };
+
+  const isRolePartiallySelected = (role: string) => {
+    const roleIds = getTeachersByRole(teachers, role);
+    return (
+      roleIds.length > 0 &&
+      roleIds.some((id) => selectedTeacherIds.includes(id)) &&
+      !roleIds.every((id) => selectedTeacherIds.includes(id))
+    );
+  };
+
+  const mandatoryCount = lockedTeacherIds.filter((id) => selectedTeacherIds.includes(id)).length;
+  const preferredCount = selectedTeacherIds.length - mandatoryCount;
+
+  return (
+    <Dialog open={open} onClose={onClose} className="max-w-lg">
+      <DialogHeader>
+        <DialogTitle>{meeting ? "עריכת ישיבת מליאה" : "ישיבת מליאה חדשה"}</DialogTitle>
+      </DialogHeader>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          meeting ? updateMut.mutate() : createMut.mutate();
+        }}
+        className="space-y-4"
+      >
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <Label htmlFor="plenary-name">שם</Label>
+            <Input
+              id="plenary-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="שם ישיבת המליאה"
+              required
+            />
+          </div>
+          <div>
+            <Label htmlFor="plenary-hours">שעות/שבוע</Label>
+            <Input
+              id="plenary-hours"
+              type="number"
+              min={1}
+              max={10}
+              value={hoursPerWeek}
+              onChange={(e) => setHoursPerWeek(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <Label htmlFor="plenary-color">צבע</Label>
+            <Input
+              id="plenary-color"
+              type="color"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              className="h-10 p-1"
+            />
+          </div>
+        </div>
+
+        {hoursPerWeek >= 2 && (
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={requireConsecutive}
+              onChange={(e) => setRequireConsecutive(e.target.checked)}
+              className="rounded border-border"
+            />
+            <span className="text-sm">שעה כפולה (שעות רצופות)</span>
+          </label>
+        )}
+
+        {/* Teacher picker with mandatory/preferred distinction */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <Label>
+              מורים ({selectedTeacherIds.length})
+              {mandatoryCount > 0 && (
+                <span className="text-xs text-muted-foreground mr-2">
+                  {mandatoryCount} חובה, {preferredCount} מועדפים
+                </span>
+              )}
+            </Label>
+          </div>
+
+          <div className="flex items-center gap-2 mb-2 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1">
+              <Lock className="h-3 w-3 text-rose-400" /> = נוכחות חובה
+            </span>
+            <span className="flex items-center gap-1">
+              <LockOpen className="h-3 w-3 text-sky-400" /> = נוכחות מועדפת
+            </span>
+          </div>
+
+          {/* Role-based selection with lock */}
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {ROLE_FILTERS.map((role) => {
+              const roleIds = getTeachersByRole(teachers, role.value);
+              if (roleIds.length === 0) return null;
+              const full = isRoleFullySelected(role.value);
+              const partial = isRolePartiallySelected(role.value);
+              const selectedInRole = roleIds.filter((id) => selectedTeacherIds.includes(id));
+              const lockedInRole = selectedInRole.filter((id) => lockedTeacherIds.includes(id));
+              const allLocked = selectedInRole.length > 0 && lockedInRole.length === selectedInRole.length;
+              const hasAnySelected = selectedInRole.length > 0;
+              return (
+                <div key={role.value} className="flex items-center rounded-full border overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => toggleRole(role.value)}
+                    className={`px-2.5 py-1 text-xs transition-colors cursor-pointer ${
+                      full
+                        ? "bg-primary text-primary-foreground"
+                        : partial
+                          ? "bg-primary/20"
+                          : "bg-background hover:bg-muted"
+                    }`}
+                  >
+                    {role.label} ({roleIds.length})
+                  </button>
+                  {hasAnySelected && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (allLocked) {
+                          const unlockSet = new Set(selectedInRole);
+                          setLockedTeacherIds((prev) =>
+                            prev.filter((id) => !unlockSet.has(id)),
+                          );
+                        } else {
+                          setLockedTeacherIds((prev) => {
+                            const merged = new Set(prev);
+                            for (const id of selectedInRole) merged.add(id);
+                            return Array.from(merged);
+                          });
+                        }
+                      }}
+                      className={`px-1.5 py-1 text-xs transition-colors cursor-pointer border-r ${
+                        allLocked
+                          ? "bg-rose-200 text-rose-800 hover:bg-rose-300"
+                          : lockedInRole.length > 0
+                            ? "bg-amber-100 text-amber-700 hover:bg-amber-200"
+                            : "bg-sky-100 text-sky-700 hover:bg-sky-200"
+                      }`}
+                      title={allLocked
+                        ? `הסר נעילת חובה מ-${selectedInRole.length} ${role.label}`
+                        : `נעל ${selectedInRole.length} ${role.label} כחובה`}
+                    >
+                      {allLocked ? <Lock className="h-3 w-3" /> : <LockOpen className="h-3 w-3" />}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Teacher name list */}
+          <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto">
+            {teachers.map((t) => {
+              const isSelected = selectedTeacherIds.includes(t.id);
+              const isMandatory = lockedTeacherIds.includes(t.id);
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => toggleTeacher(t.id)}
+                  className={`flex items-center gap-1 px-3 py-1 text-sm rounded-full border transition-colors cursor-pointer ${
+                    isSelected
+                      ? isMandatory
+                        ? "bg-rose-200 text-rose-900 border-rose-300"
+                        : "bg-sky-200 text-sky-900 border-sky-300"
+                      : "bg-background hover:bg-muted"
+                  }`}
+                >
+                  {t.name}
+                  {isSelected && (
+                    <span
+                      onClick={(e) => toggleAttendance(t.id, e)}
+                      className="mr-1 hover:opacity-70"
+                      title={isMandatory ? "נוכחות חובה — לחץ לשנות למועדפת" : "נוכחות מועדפת — לחץ לשנות לחובה"}
+                    >
+                      {isMandatory ? (
+                        <Lock className="h-3 w-3" />
+                      ) : (
+                        <LockOpen className="h-3 w-3" />
+                      )}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            {teachers.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                אין מורים — הוסף מורים קודם
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <Label>נעילה / חלופי / חסימה</Label>
+          <PinGrid
+            reqId={meeting?.id ?? 0}
+            maxPins={hoursPerWeek}
+            pinnedSlots={pinnedSlots}
+            onChange={setPinnedSlots}
+            blockedSlots={blockedSlots}
+            onBlockedChange={setBlockedSlots}
+            alternativeSlots={alternativeSlots}
+            onAlternativeChange={setAlternativeSlots}
+            maxAlternative={hoursPerWeek}
+            fetchSlots={fetchMeetingAvailableSlots}
+            queryKeyPrefix="meeting-available-slots"
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            כחול = מיקום ראשי | צהוב = מיקום חלופי — הסולבר יבחר אחד מהשניים
+          </p>
+        </div>
+
+        <div className="rounded-md border border-amber-100 bg-amber-50/60 p-3 text-sm text-amber-700">
+          <strong>ישיבת מליאה:</strong> לא ניתן לקיים ישיבות אחרות במקביל.
+          מורים עם נוכחות חובה חייבים להיות פנויים. מורים עם נוכחות מועדפת — ככל שיהיו יותר נוכחים הניקוד גבוה יותר.
+        </div>
+
+        <DialogFooter>
+          <Button type="submit" disabled={loading}>
+            {loading ? "שומר..." : meeting ? "עדכן" : "צור"}
+          </Button>
+          <Button type="button" variant="outline" onClick={onClose}>
+            ביטול
+          </Button>
+        </DialogFooter>
+      </form>
+    </Dialog>
+  );
+}
+
 // ─── Main Page ───────────────────────────────────────────
 export default function MeetingsPage() {
   const schoolId = useSchoolStore((s) => s.activeSchoolId);
@@ -470,12 +851,18 @@ export default function MeetingsPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Meeting | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Meeting | null>(null);
+  const [plenaryFormOpen, setPlenaryFormOpen] = useState(false);
+  const [editingPlenary, setEditingPlenary] = useState<Meeting | null>(null);
 
-  const { data: meetings = [] } = useQuery({
+  const { data: allMeetings = [] } = useQuery({
     queryKey: ["meetings", schoolId],
     queryFn: () => fetchMeetings(schoolId!),
     enabled: !!schoolId,
   });
+
+  // Split plenary from regular meetings
+  const meetings = allMeetings.filter((m) => m.meeting_type !== "PLENARY");
+  const plenaryMeetings = allMeetings.filter((m) => m.meeting_type === "PLENARY");
 
   const { data: teachers = [] } = useQuery({
     queryKey: ["teachers", schoolId],
@@ -487,7 +874,7 @@ export default function MeetingsPage() {
     mutationFn: () => deleteMeeting(deleteTarget!.id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["meetings", schoolId] });
-      toast.success("ישיבה נמחקה");
+      toast.success(deleteTarget?.meeting_type === "PLENARY" ? "ישיבת מליאה נמחקה" : "ישיבה נמחקה");
       setDeleteTarget(null);
     },
     onError: () => toast.error("שגיאה במחיקה"),
@@ -502,6 +889,26 @@ export default function MeetingsPage() {
     onError: () => toast.error("שגיאה ברענון מורים"),
   });
 
+  const { data: school } = useQuery({
+    queryKey: ["school", schoolId],
+    queryFn: () => fetchSchool(schoolId!),
+    enabled: !!schoolId,
+  });
+
+  const [maxConsecMeetings, setMaxConsecMeetings] = useState(4);
+
+  // Sync state when school loads
+  if (school && maxConsecMeetings !== school.max_consecutive_meetings) {
+    setMaxConsecMeetings(school.max_consecutive_meetings);
+  }
+
+  const updateMaxConsecMut = useMutation({
+    mutationFn: (val: number) => updateSchool(schoolId!, { max_consecutive_meetings: val }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["school", schoolId] });
+    },
+  });
+
   const teacherMap = Object.fromEntries(teachers.map((t) => [t.id, t.name]));
 
   if (!schoolId) {
@@ -514,6 +921,104 @@ export default function MeetingsPage() {
 
   return (
     <div className="space-y-6">
+      {/* ── Plenary Section ────────────────────────────── */}
+      <div className="rounded-lg border border-rose-200 bg-rose-50/40 p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Users className="h-5 w-5 text-rose-400" />
+            <h3 className="text-lg font-bold text-rose-800">ישיבת מליאה</h3>
+          </div>
+          {plenaryMeetings.length === 0 && (
+            <Button
+              size="sm"
+              className="bg-rose-400 hover:bg-rose-500"
+              onClick={() => {
+                setEditingPlenary(null);
+                setPlenaryFormOpen(true);
+              }}
+            >
+              <Plus className="h-4 w-4" />
+              הוסף ישיבת מליאה
+            </Button>
+          )}
+        </div>
+
+        {plenaryMeetings.length > 0 ? (
+          plenaryMeetings.map((plenary) => {
+            const mandatoryIds = new Set(plenary.locked_teacher_ids ?? []);
+            const mandatoryTeachers = plenary.teacher_ids.filter((id) => mandatoryIds.has(id));
+            const preferredTeachers = plenary.teacher_ids.filter((id) => !mandatoryIds.has(id));
+            return (
+              <div key={plenary.id} className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="font-medium">{plenary.name}</span>
+                    <Badge variant="outline">{plenary.hours_per_week} שעות/שבוע</Badge>
+                    <Badge variant={plenary.is_active ? "default" : "outline"}>
+                      {plenary.is_active ? "פעילה" : "לא פעילה"}
+                    </Badge>
+                  </div>
+                  <div className="flex gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => {
+                        setEditingPlenary(plenary);
+                        setPlenaryFormOpen(true);
+                      }}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setDeleteTarget(plenary)}
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
+                </div>
+                {mandatoryTeachers.length > 0 && (
+                  <div>
+                    <span className="text-xs font-medium text-rose-600 mb-1 block">
+                      נוכחות חובה ({mandatoryTeachers.length})
+                    </span>
+                    <div className="flex flex-wrap gap-1">
+                      {mandatoryTeachers.map((tid) => (
+                        <Badge key={tid} className="text-xs bg-rose-300 text-rose-900">
+                          <Lock className="h-3 w-3 ml-1" />
+                          {teacherMap[tid] ?? tid}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {preferredTeachers.length > 0 && (
+                  <div>
+                    <span className="text-xs font-medium text-sky-600 mb-1 block">
+                      נוכחות מועדפת ({preferredTeachers.length})
+                    </span>
+                    <div className="flex flex-wrap gap-1">
+                      {preferredTeachers.map((tid) => (
+                        <Badge key={tid} variant="outline" className="text-xs border-sky-300 text-sky-700 bg-sky-50">
+                          <LockOpen className="h-3 w-3 ml-1" />
+                          {teacherMap[tid] ?? tid}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            אין ישיבת מליאה — הוסף כדי לתזמן ישיבה שבה כל הצוות נפגש
+          </p>
+        )}
+      </div>
+
+      {/* ── Regular Meetings Section ───────────────────── */}
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold">ישיבות</h2>
         <div className="flex gap-2">
@@ -559,28 +1064,30 @@ export default function MeetingsPage() {
           {
             header: "מורים",
             accessor: (m) => {
-              const lockedCount = m.locked_teacher_ids?.length ?? 0;
+              const lockedSet = new Set(m.locked_teacher_ids ?? []);
+              const names = m.teacher_ids
+                .map((tid) => ({
+                  id: tid,
+                  name: teacherMap[tid] ?? String(tid),
+                  locked: lockedSet.has(tid),
+                }))
+                .sort((a, b) => a.name.localeCompare(b.name, "he"));
               return (
-                <div className="flex flex-wrap gap-1 items-center">
-                  <span className="text-sm text-muted-foreground">
+                <div>
+                  <span className="text-xs text-muted-foreground mb-1 block">
                     {m.teacher_ids.length} מורים
+                    {lockedSet.size > 0 && ` (${lockedSet.size} נעולים)`}
                   </span>
-                  {lockedCount > 0 && (
-                    <Badge variant="default" className="text-xs bg-amber-600">
-                      <Lock className="h-3 w-3 ml-1" />
-                      {lockedCount} נעולים
-                    </Badge>
-                  )}
-                  {m.teacher_ids.slice(0, 3).map((tid) => (
-                    <Badge key={tid} variant="outline" className="text-xs">
-                      {teacherMap[tid] ?? tid}
-                    </Badge>
-                  ))}
-                  {m.teacher_ids.length > 3 && (
-                    <span className="text-xs text-muted-foreground">
-                      +{m.teacher_ids.length - 3}
-                    </span>
-                  )}
+                  <span className="text-xs leading-relaxed">
+                    {names.map((t, i) => (
+                      <span key={t.id}>
+                        {i > 0 && ", "}
+                        <span className={t.locked ? "font-semibold text-amber-700" : ""}>
+                          {t.name}
+                        </span>
+                      </span>
+                    ))}
+                  </span>
                 </div>
               );
             },
@@ -647,6 +1154,39 @@ export default function MeetingsPage() {
           schoolId={schoolId}
         />
       )}
+
+      {plenaryFormOpen && (
+        <PlenaryFormDialog
+          open={plenaryFormOpen}
+          onClose={() => setPlenaryFormOpen(false)}
+          meeting={editingPlenary}
+          schoolId={schoolId}
+        />
+      )}
+
+      {/* ── Meeting Settings ─────────────────────────── */}
+      <div className="rounded-lg border p-4 space-y-3">
+        <h3 className="text-sm font-semibold text-muted-foreground">הגדרות ישיבות</h3>
+        <div className="flex items-center gap-3">
+          <Label htmlFor="max-consec" className="text-sm whitespace-nowrap">
+            מקסימום שעות ישיבה ברצף ללא שיעור פרונטלי
+          </Label>
+          <Input
+            id="max-consec"
+            type="number"
+            min={0}
+            max={8}
+            className="w-20"
+            value={maxConsecMeetings}
+            onChange={(e) => {
+              const val = Number(e.target.value);
+              setMaxConsecMeetings(val);
+              updateMaxConsecMut.mutate(val);
+            }}
+          />
+          <span className="text-xs text-muted-foreground">(0 = ללא הגבלה)</span>
+        </div>
+      </div>
 
       <ConfirmDialog
         open={!!deleteTarget}

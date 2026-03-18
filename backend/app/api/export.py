@@ -352,6 +352,7 @@ def _build_meetings_sheet(
     teacher_map: dict[int, Teacher],
     days: list[str],
     max_period: int,
+    all_lessons: list[ScheduledLesson] | None = None,
 ) -> None:
     ws = wb.create_sheet(title="ישיבות")
     ws.sheet_view.rightToLeft = True
@@ -412,7 +413,13 @@ def _build_meetings_sheet(
                       font=Font(size=11, name="Calibri"),
                       fill=HEADER_MEETING_FILL, alignment=RIGHT_ALIGN)
 
-        type_label = meeting.meeting_type
+        from app.models.meeting import MeetingType
+        is_plenary = meeting.meeting_type == MeetingType.PLENARY.value
+        type_labels = {
+            "HOMEROOM": "מחנכות", "COORDINATORS": "רכזים",
+            "MANAGEMENT": "ניהול", "CUSTOM": "מותאם אישית", "PLENARY": "מליאה",
+        }
+        type_label = type_labels.get(meeting.meeting_type, meeting.meeting_type)
         mandatory_label = "חובה" if meeting.is_mandatory_attendance else "לא חובה"
         _styled_cell(ws, base_row, 3, f"{type_label} | {mandatory_label}",
                       font=Font(size=10, name="Calibri", color="666666"),
@@ -422,28 +429,69 @@ def _build_meetings_sheet(
                        end_row=base_row, end_column=len(days) + 1)
         base_row += 1
 
+        # For plenary: determine which preferred teachers attend (teach on plenary day)
+        plenary_days: set[str] = set()
+        teacher_teach_days: dict[int, set[str]] = {}
+        if is_plenary and all_lessons:
+            for sm in scheduled_meetings:
+                if sm.meeting_id == mid:
+                    plenary_days.add(sm.day)
+            for lesson in all_lessons:
+                teacher_teach_days.setdefault(lesson.teacher_id, set()).add(lesson.day)
+
         # Table headers
         locked_ids = set(meeting.locked_teacher_ids or [])
         _styled_cell(ws, base_row, 1, "#", font=HEADER_FONT, fill=EMPTY_FILL)
         _styled_cell(ws, base_row, 2, "שם מורה", font=HEADER_FONT, fill=EMPTY_FILL)
         _styled_cell(ws, base_row, 3, "סטטוס", font=HEADER_FONT, fill=EMPTY_FILL)
+        if is_plenary:
+            _styled_cell(ws, base_row, 4, "נוכחות", font=HEADER_FONT, fill=EMPTY_FILL)
         base_row += 1
 
         for idx, teacher in enumerate(meeting.teachers, start=1):
             t = teacher_map.get(teacher.id, teacher)
             is_locked = teacher.id in locked_ids
-            status = "נעול — חייב להשתתף" if is_locked else "משתתף"
+
+            if is_plenary:
+                if is_locked:
+                    status = "נוכחות חובה"
+                    status_color = "DC2626"
+                else:
+                    status = "נוכחות מועדפת"
+                    status_color = "2563EB"
+
+                # Attendance: does teacher teach on plenary day?
+                t_days = teacher_teach_days.get(teacher.id, set())
+                if is_locked:
+                    attendance = "נוכח/ת"
+                    att_color = "16A34A"
+                elif plenary_days & t_days:
+                    attendance = "נוכח/ת"
+                    att_color = "16A34A"
+                else:
+                    attendance = "לא נוכח/ת"
+                    att_color = "EA580C"
+            else:
+                status = "נעול — חייב להשתתף" if is_locked else "משתתף"
+                status_color = "B45309" if is_locked else "666666"
+                attendance = None
+                att_color = None
+
             font_style = Font(bold=True, size=11, name="Calibri") if is_locked else Font(size=11, name="Calibri")
             _styled_cell(ws, base_row, 1, idx, font=Font(size=11, name="Calibri"))
             _styled_cell(ws, base_row, 2, t.name, font=font_style, alignment=RIGHT_ALIGN)
             _styled_cell(ws, base_row, 3, status, font=Font(size=10, name="Calibri",
-                          color="B45309" if is_locked else "666666"),
-                          alignment=RIGHT_ALIGN)
+                          color=status_color), alignment=RIGHT_ALIGN)
+            if attendance is not None:
+                _styled_cell(ws, base_row, 4, attendance,
+                              font=Font(bold=True, size=10, name="Calibri", color=att_color),
+                              alignment=RIGHT_ALIGN)
             base_row += 1
 
         base_row += 1  # Gap between meetings
 
     ws.column_dimensions["C"].width = 22
+    ws.column_dimensions["D"].width = 16
 
 
 # ── Main export endpoint ─────────────────────────────────────────────────
@@ -541,6 +589,7 @@ def export_excel(solution_id: int, db: Session = Depends(get_db)):
     if scheduled_meetings:
         _build_meetings_sheet(
             wb, scheduled_meetings, meeting_map, teacher_map, days, max_period,
+            all_lessons=lessons,
         )
 
     # Write to buffer

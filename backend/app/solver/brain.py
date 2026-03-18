@@ -59,6 +59,98 @@ def _get_subject_priority(subject_obj: object | None) -> int | None:
     return getattr(subject_obj, "double_priority", None)
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# AUTOMATIC PRINCIPLES — always-on, all schools, not user-configurable.
+# These encode basic scheduling reality:
+#   1. Compact school day: classes start at period 1, no gaps (HARD)
+# ══════════════════════════════════════════════════════════════════════════
+
+def _class_slot_vars(
+    data: SolverData, variables: SolverVariables, class_group_id: int,
+) -> dict[tuple[str, int], list[cp_model.IntVar]]:
+    """Return {(day, period): [vars]} for a class — lessons + relevant tracks."""
+    result: dict[tuple[str, int], list[cp_model.IntVar]] = {}
+    for key, var in variables.x.items():
+        c_id, _s, _t, d, p = key
+        if c_id == class_group_id:
+            result.setdefault((d, p), []).append(var)
+
+    added_tracks: set[int] = set()
+    for cluster in data.clusters:
+        source_ids = {sc.id for sc in cluster.source_classes}
+        if class_group_id not in source_ids:
+            continue
+        for track in cluster.tracks:
+            if track.id in added_tracks:
+                continue
+            src = getattr(track, "source_class_id", None)
+            if src is not None and src != class_group_id:
+                continue
+            added_tracks.add(track.id)
+            for tk_key, var in variables.x_track.items():
+                tk_id, d, p = tk_key
+                if tk_id == track.id:
+                    result.setdefault((d, p), []).append(var)
+
+    return result
+
+
+def _auto_compact_school_day(
+    model: cp_model.CpModel,
+    data: SolverData,
+    variables: SolverVariables,
+) -> None:
+    """Automatic principle: compact school day for ALL classes.
+
+    HARD constraint — classes must have a contiguous block of lessons
+    starting from period 1 with no gaps.
+    """
+    for cg in data.class_groups:
+        cg_id = cg.id
+        slot_vars = _class_slot_vars(data, variables, cg_id)
+
+        for day in data.days:
+            max_p = data.max_period_per_day.get(day, 0)
+            if max_p < 1:
+                continue
+
+            periods = sorted(p for (d, p) in slot_vars if d == day)
+            if not periods:
+                continue
+
+            # Build occupied[p] = bool var for each period
+            occ: dict[int, cp_model.IntVar] = {}
+            for p in periods:
+                vlist = slot_vars.get((day, p), [])
+                if vlist:
+                    b = model.new_bool_var(f"auto_compact_{cg_id}_{day}_p{p}")
+                    model.add(sum(vlist) >= 1).only_enforce_if(b)
+                    model.add(sum(vlist) == 0).only_enforce_if(b.negated())
+                    occ[p] = b
+
+            if not occ:
+                continue
+
+            # day_active = at least one lesson this day
+            day_active = model.new_bool_var(f"auto_compact_active_{cg_id}_{day}")
+            model.add(sum(occ.values()) >= 1).only_enforce_if(day_active)
+            model.add(sum(occ.values()) == 0).only_enforce_if(day_active.negated())
+
+            # 1) If day active, period 1 must be occupied
+            if 1 in occ:
+                model.add(occ[1] == 1).only_enforce_if(day_active)
+
+            # 2) Prefix property: if period p is free, all later periods free
+            #    (no gaps — contiguous block from period 1)
+            for i in range(len(periods) - 1):
+                p_cur = periods[i]
+                p_next = periods[i + 1]
+                if p_cur in occ and p_next in occ:
+                    model.add(occ[p_next] == 0).only_enforce_if(
+                        occ[p_cur].negated()
+                    )
+
+
 # ── Main entry point ──────────────────────────────────────────────────────
 
 def apply_brain_constraints(
@@ -68,12 +160,27 @@ def apply_brain_constraints(
 ) -> None:
     """Apply all brain heuristics to the model."""
     _NEXT_BRAIN_ID_HOLDER.clear()
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Automatic principles — fundamental rules that apply to ALL schools.
+    # These are not configurable by the user; they represent basic
+    # scheduling reality that every school timetable must follow.
+    # ═══════════════════════════════════════════════════════════════════════
+    _auto_compact_school_day(model, data, variables)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Brain heuristics — intelligent scheduling preferences
+    # ═══════════════════════════════════════════════════════════════════════
     _apply_same_day_consecutive(model, data, variables)
     # MAX_SUBJECT_PER_DAY removed — now managed via DB constraint (MAX_PER_DAY)
     _apply_always_double(model, data, variables)
     _apply_double_period_preferences(model, data, variables)
     _apply_morning_priority(model, data, variables)
     _apply_flexible_meeting_attendance(model, data, variables)
+    _apply_plenary_preferred_attendance(model, data, variables)
+    _apply_non_plenary_teachers_teach_during_plenary(model, data, variables)
+    _apply_homeroom_daily_meeting(model, data, variables)
+    _apply_max_consecutive_meetings(model, data, variables)
 
     # Compute frontal hours per teacher (shared by oz la tmura)
     teacher_frontal = _compute_teacher_frontal(data)
@@ -724,6 +831,428 @@ def _apply_flexible_meeting_attendance(
                 "weight": _FLEXIBLE_MEETING_WEIGHT,
             }
             brain_id -= 1
+
+    _update_brain_id(brain_id)
+
+
+# ── Plenary preferred teacher attendance on teaching day ──────────────────
+
+_PLENARY_PREFERRED_WEIGHT = 70  # High — strongly prefer preferred teachers present
+
+
+def _apply_plenary_preferred_attendance(
+    model: cp_model.CpModel,
+    data: SolverData,
+    variables: SolverVariables,
+) -> None:
+    """Brain principle: plenary preferred teachers should teach on plenary day.
+
+    For PLENARY meetings with is_mandatory_attendance=False, locked teachers
+    are enforced by the system constraint. Non-locked (preferred) teachers
+    should ideally teach on the same day as the plenary — the more present,
+    the higher the score.
+    """
+    from app.models.meeting import MeetingType
+
+    brain_id = _next_brain_id() - 1
+
+    # Build teacher day vars (same structure as in model_builder)
+    teacher_day_vars: dict[int, dict[str, list[cp_model.IntVar]]] = {}
+    for key, var in variables.x.items():
+        _c, _s, t_id, day, _p = key
+        teacher_day_vars.setdefault(t_id, {}).setdefault(day, []).append(var)
+    for cluster in data.clusters:
+        for track in cluster.tracks:
+            if track.teacher_id is not None:
+                for key, var in variables.x_track.items():
+                    tk_id, day, _p = key
+                    if tk_id == track.id:
+                        teacher_day_vars.setdefault(track.teacher_id, {}).setdefault(day, []).append(var)
+
+    for meeting in data.meetings:
+        if meeting.meeting_type != MeetingType.PLENARY.value:
+            continue
+        if not meeting.teachers:
+            continue
+
+        locked_ids = set(getattr(meeting, "locked_teacher_ids", None) or [])
+        # Only handle non-locked (preferred) teachers
+        preferred_teachers = [t for t in meeting.teachers if t.id not in locked_ids]
+        if not preferred_teachers:
+            continue
+
+        has_any_penalty = False
+
+        for teacher in preferred_teachers:
+            all_teacher_vars = teacher_day_vars.get(teacher.id, {})
+            has_any_teaching = any(
+                len(vars_list) > 0 for vars_list in all_teacher_vars.values()
+            )
+            if not has_any_teaching:
+                continue  # Non-teaching staff — skip
+
+            for day in data.days:
+                # Collect meeting vars for this day
+                day_meeting_vars: list[cp_model.IntVar] = []
+                for key, var in variables.x_meeting.items():
+                    m_id, d, _p = key
+                    if m_id == meeting.id and d == day:
+                        day_meeting_vars.append(var)
+
+                if not day_meeting_vars:
+                    continue
+
+                lesson_vars = all_teacher_vars.get(day, [])
+                if not lesson_vars:
+                    # Teacher has no possible lessons on this day →
+                    # if plenary is on this day, this teacher can't attend (penalty)
+                    # meeting_on_day = 1 iff any meeting var on this day is 1
+                    meeting_on_day = model.new_bool_var(
+                        f"brain_plenary_m{meeting.id}_day_{day}_t{teacher.id}"
+                    )
+                    model.add_max_equality(meeting_on_day, day_meeting_vars)
+                    variables.penalties.append(
+                        (meeting_on_day, _PLENARY_PREFERRED_WEIGHT, brain_id)
+                    )
+                    has_any_penalty = True
+                else:
+                    # Teacher has possible lessons on this day.
+                    # Penalize if plenary is here but teacher doesn't teach.
+                    teacher_active = model.new_bool_var(
+                        f"brain_plenary_t{teacher.id}_active_{day}_m{meeting.id}"
+                    )
+                    model.add_max_equality(teacher_active, lesson_vars)
+
+                    # meeting_on_day
+                    meeting_on_day = model.new_bool_var(
+                        f"brain_plenary_m{meeting.id}_onday_{day}_t{teacher.id}"
+                    )
+                    model.add_max_equality(meeting_on_day, day_meeting_vars)
+
+                    # penalty = meeting_on_day AND NOT teacher_active
+                    penalty = model.new_bool_var(
+                        f"brain_plenary_absent_t{teacher.id}_{day}_m{meeting.id}"
+                    )
+                    model.add(penalty <= meeting_on_day)
+                    model.add(penalty <= teacher_active.negated())
+                    model.add(penalty >= meeting_on_day + teacher_active.negated() - 1)
+                    variables.penalties.append(
+                        (penalty, _PLENARY_PREFERRED_WEIGHT, brain_id)
+                    )
+                    has_any_penalty = True
+
+        if has_any_penalty:
+            variables.brain_info[brain_id] = {
+                "name": f"נוכחות מועדפת במליאה — {meeting.name}",
+                "weight": _PLENARY_PREFERRED_WEIGHT,
+            }
+            brain_id -= 1
+
+    _update_brain_id(brain_id)
+
+
+# ── Non-plenary teachers should teach during plenary hours ────────────────
+
+# ── Homeroom daily class meeting ──────────────────────────────────────────
+
+_HOMEROOM_DAILY_WEIGHT = 95  # Very high — top priority
+
+
+def _apply_homeroom_daily_meeting(
+    model: cp_model.CpModel,
+    data: SolverData,
+    variables: SolverVariables,
+) -> None:
+    """Brain principle: homeroom teacher should teach their class every day.
+
+    Per-class behavior:
+    - homeroom_daily_required=True → HARD constraint (must teach every day at school)
+    - homeroom_daily_required=False → SOFT constraint (preferred, weight 95)
+
+    Excludes math/English הקבצות taught by other teachers (naturally excluded
+    since we only look at lessons taught by the homeroom teacher herself).
+    """
+    if not data.homeroom_map:
+        return
+
+    # Build class_id -> class_name and class_id -> homeroom_daily_required
+    class_name_map: dict[int, str] = {}
+    class_required_map: dict[int, bool] = {}
+    for cg in data.class_groups:
+        class_name_map[cg.id] = cg.name
+        class_required_map[cg.id] = getattr(cg, "homeroom_daily_required", False)
+
+    # Build teacher_id -> set of days teacher has ANY teaching activity
+    teacher_active_days: dict[int, dict[str, list[cp_model.IntVar]]] = {}
+    for key, var in variables.x.items():
+        _c, _s, t_id, day, _p = key
+        teacher_active_days.setdefault(t_id, {}).setdefault(day, []).append(var)
+    for cluster in data.clusters:
+        for track in cluster.tracks:
+            if track.teacher_id is not None:
+                for key, var in variables.x_track.items():
+                    tk_id, day, _p = key
+                    if tk_id == track.id:
+                        teacher_active_days.setdefault(track.teacher_id, {}).setdefault(day, []).append(var)
+
+    brain_id = _next_brain_id() - 1
+    has_any_penalty = False
+
+    for teacher_id, class_id in data.homeroom_map.items():
+        is_required = class_required_map.get(class_id, False)
+        class_name = class_name_map.get(class_id, str(class_id))
+
+        # Find lessons where this teacher teaches this class
+        relevant_keys: dict[str, list[cp_model.IntVar]] = {}
+        for key, var in variables.x.items():
+            c_id, _s, t_id, day, _p = key
+            if c_id == class_id and t_id == teacher_id:
+                relevant_keys.setdefault(day, []).append(var)
+
+        # Also check tracks that serve this class
+        for cluster in data.clusters:
+            for track in cluster.tracks:
+                if track.teacher_id != teacher_id:
+                    continue
+                serves_class = False
+                if track.source_class_id == class_id:
+                    serves_class = True
+                elif not track.source_class_id:
+                    source_ids = [c.id for c in cluster.source_classes]
+                    if class_id in source_ids:
+                        serves_class = True
+                if serves_class:
+                    for key, var in variables.x_track.items():
+                        tk_id, day, _p = key
+                        if tk_id == track.id:
+                            relevant_keys.setdefault(day, []).append(var)
+
+        if not relevant_keys:
+            continue
+
+        for day in data.days:
+            day_vars = relevant_keys.get(day, [])
+            if not day_vars:
+                continue
+
+            teaches_class = model.new_bool_var(
+                f"brain_homeroom_t{teacher_id}_c{class_id}_{day}"
+            )
+            model.add_max_equality(teaches_class, day_vars)
+
+            if is_required:
+                # HARD: if teacher is at school this day, she must teach her class
+                all_teacher_day_vars = teacher_active_days.get(teacher_id, {}).get(day, [])
+                if all_teacher_day_vars:
+                    teacher_at_school = model.new_bool_var(
+                        f"brain_homeroom_atschool_t{teacher_id}_{day}"
+                    )
+                    model.add_max_equality(teacher_at_school, all_teacher_day_vars)
+                    # If at school → must teach homeroom class
+                    model.add(teaches_class >= teacher_at_school)
+            else:
+                # SOFT: penalize missing
+                penalty_idx = len(variables.penalties)
+                variables.penalties.append(
+                    (teaches_class.negated(), _HOMEROOM_DAILY_WEIGHT, brain_id)
+                )
+                variables.penalty_labels[penalty_idx] = class_name
+                has_any_penalty = True
+
+    if has_any_penalty:
+        variables.brain_info[brain_id] = {
+            "name": "מחנכת פוגשת כיתה כל יום",
+            "weight": _HOMEROOM_DAILY_WEIGHT,
+        }
+        brain_id -= 1
+
+    _update_brain_id(brain_id)
+
+
+# ── Max consecutive meeting hours without frontal lesson ──────────────────
+
+
+def _apply_max_consecutive_meetings(
+    model: cp_model.CpModel,
+    data: SolverData,
+    variables: SolverVariables,
+) -> None:
+    """HARD: a teacher cannot have more than N consecutive meeting periods
+    without at least one frontal lesson breaking the run.
+
+    Configurable via school.max_consecutive_meetings (default 4, 0 = disabled).
+    """
+    max_consec = getattr(data.school, "max_consecutive_meetings", 4)
+    if not max_consec or max_consec <= 0:
+        return
+
+    # Build teacher -> meeting_ids
+    teacher_meeting_ids: dict[int, set[int]] = {}
+    for meeting in data.meetings:
+        for t in meeting.teachers:
+            teacher_meeting_ids.setdefault(t.id, set()).add(meeting.id)
+
+    # Collect all teacher IDs that participate in meetings
+    if not teacher_meeting_ids:
+        return
+
+    # Build teacher -> track_ids
+    teacher_track_ids: dict[int, set[int]] = {}
+    for cluster in data.clusters:
+        for track in cluster.tracks:
+            if track.teacher_id is not None:
+                teacher_track_ids.setdefault(track.teacher_id, set()).add(track.id)
+
+    for teacher_id, m_ids in teacher_meeting_ids.items():
+        my_track_ids = teacher_track_ids.get(teacher_id, set())
+
+        for day in data.days:
+            # Get sorted periods available on this day
+            day_periods = sorted(
+                p for d, p in data.available_slots if d == day
+            )
+            if len(day_periods) <= max_consec:
+                continue  # Not enough periods to violate
+
+            # For each window of (max_consec + 1) consecutive periods,
+            # at least one must have a frontal lesson (not just meetings).
+            for i in range(len(day_periods) - max_consec):
+                window = day_periods[i: i + max_consec + 1]
+
+                # Check if all periods in window are truly consecutive
+                if window[-1] - window[0] != max_consec:
+                    continue  # Not consecutive periods
+
+                # Collect frontal lesson vars for this teacher in this window
+                frontal_vars: list[cp_model.IntVar] = []
+
+                for p in window:
+                    for key, var in variables.x.items():
+                        _c, _s, t_id, d, period = key
+                        if t_id == teacher_id and d == day and period == p:
+                            frontal_vars.append(var)
+
+                    for tk_id in my_track_ids:
+                        tk = (tk_id, day, p)
+                        if tk in variables.x_track:
+                            frontal_vars.append(variables.x_track[tk])
+
+                if not frontal_vars:
+                    continue  # No possible frontal lessons in window
+
+                # Collect meeting vars for this window
+                meeting_vars: list[cp_model.IntVar] = []
+                for p in window:
+                    for m_id in m_ids:
+                        mk = (m_id, day, p)
+                        if mk in variables.x_meeting:
+                            meeting_vars.append(variables.x_meeting[mk])
+
+                if not meeting_vars:
+                    continue
+
+                # If all periods in window have meetings, at least one must
+                # also have a frontal lesson.
+                # Equivalent: sum(meetings) == len(window) → sum(frontal) >= 1
+                # But since a teacher can only do one thing per slot, meetings
+                # filling ALL slots means no frontal. So we just enforce:
+                # sum(meetings in window) <= max_consec
+                # (at most max_consec meeting slots in any window of max_consec+1)
+                model.add(sum(meeting_vars) <= max_consec)
+
+
+_NON_PLENARY_TEACH_WEIGHT = 80  # High — strongly prefer filling plenary slots
+
+
+def _apply_non_plenary_teachers_teach_during_plenary(
+    model: cp_model.CpModel,
+    data: SolverData,
+    variables: SolverVariables,
+) -> None:
+    """Brain principle: teachers NOT in the plenary should teach during plenary hours.
+
+    When a teacher is not part of the plenary meeting at all, we prefer they
+    have lessons during the plenary timeslot so those hours aren't wasted.
+    """
+    from app.models.meeting import MeetingType
+
+    plenary_meetings = [
+        m for m in data.meetings
+        if m.meeting_type == MeetingType.PLENARY.value and m.teachers
+    ]
+    if not plenary_meetings:
+        return
+
+    brain_id = _next_brain_id() - 1
+
+    # Collect all plenary teacher IDs
+    plenary_teacher_ids: set[int] = set()
+    for pm in plenary_meetings:
+        plenary_teacher_ids.update(t.id for t in pm.teachers)
+
+    # Collect all teaching teacher IDs
+    teaching_teacher_ids: set[int] = set()
+    for req in data.requirements:
+        if req.teacher_id is not None and not req.is_grouped:
+            teaching_teacher_ids.add(req.teacher_id)
+    for cluster in data.clusters:
+        for track in cluster.tracks:
+            if track.teacher_id is not None:
+                teaching_teacher_ids.add(track.teacher_id)
+
+    # Non-plenary teachers who have teaching assignments
+    non_plenary = teaching_teacher_ids - plenary_teacher_ids
+    if not non_plenary:
+        return
+
+    has_any_penalty = False
+
+    for teacher_id in non_plenary:
+        for pm in plenary_meetings:
+            for day, period in data.available_slots:
+                mk = (pm.id, day, period)
+                meeting_var = variables.x_meeting.get(mk)
+                if meeting_var is None:
+                    continue
+
+                # Collect all lesson/track vars for this teacher at this slot
+                lesson_vars: list[cp_model.IntVar] = []
+                for key, var in variables.x.items():
+                    c_id, s_id, t_id, d, p = key
+                    if t_id == teacher_id and d == day and p == period:
+                        lesson_vars.append(var)
+                for cluster in data.clusters:
+                    for track in cluster.tracks:
+                        if track.teacher_id == teacher_id:
+                            tk = (track.id, day, period)
+                            if tk in variables.x_track:
+                                lesson_vars.append(variables.x_track[tk])
+
+                if not lesson_vars:
+                    continue
+
+                # Penalize: if plenary is here AND teacher has NO lesson
+                teacher_teaches = model.new_bool_var(
+                    f"brain_nonplenary_t{teacher_id}_teaches_{day}_p{period}"
+                )
+                model.add_max_equality(teacher_teaches, lesson_vars)
+
+                # penalty = plenary_here AND NOT teaches
+                penalty = model.new_bool_var(
+                    f"brain_nonplenary_idle_t{teacher_id}_{day}_p{period}"
+                )
+                model.add(penalty <= meeting_var)
+                model.add(penalty <= teacher_teaches.negated())
+                model.add(penalty >= meeting_var + teacher_teaches.negated() - 1)
+                variables.penalties.append((penalty, _NON_PLENARY_TEACH_WEIGHT, brain_id))
+                has_any_penalty = True
+
+    if has_any_penalty:
+        variables.brain_info[brain_id] = {
+            "name": "מורים שלא במליאה — ילמדו בשעות המליאה",
+            "weight": _NON_PLENARY_TEACH_WEIGHT,
+        }
+        brain_id -= 1
 
     _update_brain_id(brain_id)
 

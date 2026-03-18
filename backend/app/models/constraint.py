@@ -65,6 +65,10 @@ class RuleType(str, enum.Enum):
     HOMEROOM_EARLY = "HOMEROOM_EARLY"
     # Class end time
     CLASS_END_TIME = "CLASS_END_TIME"
+    # Teacher day end limit
+    TEACHER_DAY_END_LIMIT = "TEACHER_DAY_END_LIMIT"
+    # Teacher preferred free day
+    TEACHER_PREFERRED_FREE_DAY = "TEACHER_PREFERRED_FREE_DAY"
 
 
 class TargetType(str, enum.Enum):

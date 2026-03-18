@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   Play,
+  Square,
   CheckCircle2,
   AlertTriangle,
   XCircle,
@@ -18,6 +19,9 @@ import { useSchoolStore } from "@/stores/schoolStore";
 import {
   validateBeforeSolve,
   runSolver,
+  startSolveAsync,
+  pollSolveProgress,
+  type SolveProgressData,
   detectOverlaps,
   toggleOverlaps,
   clearAllOverlaps,
@@ -26,6 +30,7 @@ import {
   type OverlapDetectionResult,
   type OverlapResolution,
   type DiagnosisItem,
+  stopSolver,
 } from "@/api/solver";
 import { Button } from "@/components/common/Button";
 import {
@@ -42,7 +47,7 @@ import type { ValidationResult, Solution } from "@/types/models";
 export default function SolverPage() {
   const schoolId = useSchoolStore((s) => s.activeSchoolId);
 
-  const [maxTime, setMaxTime] = useState(300);
+  const [maxTime, setMaxTime] = useState(30);
   const [maxSolutions, setMaxSolutions] = useState(1);
   const [numWorkers, setNumWorkers] = useState(8);
 
@@ -51,10 +56,19 @@ export default function SolverPage() {
     status: string;
     message: string;
     solve_time: number;
+    first_solution_time?: number | null;
     solutions: Solution[];
     diagnosis?: DiagnosisItem[] | null;
   } | null>(null);
   const [elapsedTimer, setElapsedTimer] = useState(0);
+  const [progress, setProgress] = useState<SolveProgressData | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string | null>(() =>
+    localStorage.getItem("solve_job_id"),
+  );
+  const [isSolving, setIsSolving] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const solveStartRef = useRef<number>(0);
 
   // Overlap conflict state
   const [overlaps, setOverlaps] = useState<OverlapConflict[]>([]);
@@ -76,55 +90,123 @@ export default function SolverPage() {
     onError: () => toast.error("שגיאה בבדיקת תקינות"),
   });
 
-  const solveMut = useMutation({
-    mutationFn: async () => {
-      const start = Date.now();
-      const interval = setInterval(
-        () => setElapsedTimer(Math.round((Date.now() - start) / 1000)),
-        1000,
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const handleSolveResult = useCallback(async (result: {
+    status: string;
+    message: string;
+    solve_time: number;
+    first_solution_time?: number | null;
+    solutions: Solution[];
+    diagnosis?: DiagnosisItem[] | null;
+  }) => {
+    setSolveResult(result);
+    setIsSolving(false);
+    setActiveJobId(null);
+    localStorage.removeItem("solve_job_id");
+    setProgress(null);
+    stopPolling();
+
+    if (result.status === "OPTIMAL" || result.status === "FEASIBLE") {
+      toast.success(
+        `נמצאו ${result.solutions.length} פתרונות ב-${result.solve_time} שניות`,
       );
+    } else if (result.status === "INFEASIBLE") {
       try {
-        const result = await runSolver({
-          school_id: schoolId!,
-          max_time: maxTime,
-          max_solutions: maxSolutions,
-          num_workers: numWorkers,
-        });
-        return result;
-      } finally {
-        clearInterval(interval);
-      }
-    },
-    onSuccess: async (result) => {
-      setSolveResult(result);
-      if (result.status === "OPTIMAL" || result.status === "FEASIBLE") {
-        toast.success(
-          `נמצאו ${result.solutions.length} פתרונות ב-${result.solve_time} שניות`,
-        );
-      } else if (result.status === "INFEASIBLE") {
-        // Auto-detect overlaps
-        try {
-          const detected = await detectOverlaps(schoolId!);
-          setOverlaps(detected.conflicts);
-          setApprovedOverlaps(detected.approved);
-          if (detected.conflicts.length > 0) {
-            toast.error(
-              `לא ניתן לפתור — נמצאו ${detected.conflicts.length} חפיפות מורים`,
-            );
-          } else {
-            toast.error(result.message);
-          }
-        } catch {
+        const detected = await detectOverlaps(schoolId!);
+        setOverlaps(detected.conflicts);
+        setApprovedOverlaps(detected.approved);
+        if (detected.conflicts.length > 0) {
+          toast.error(
+            `לא ניתן לפתור — נמצאו ${detected.conflicts.length} חפיפות מורים`,
+          );
+        } else {
           toast.error(result.message);
         }
-      } else {
+      } catch {
         toast.error(result.message);
       }
-    },
-    onError: (err) => {
+    } else {
+      toast.error(result.message);
+    }
+  }, [schoolId, stopPolling]);
+
+  const startPolling = useCallback((jobId: string) => {
+    stopPolling();
+    setIsSolving(true);
+    solveStartRef.current = Date.now();
+    timerRef.current = setInterval(() => {
+      setElapsedTimer(Math.round((Date.now() - solveStartRef.current) / 1000));
+    }, 1000);
+    pollRef.current = setInterval(async () => {
+      try {
+        const prog = await pollSolveProgress(jobId);
+        setProgress(prog);
+        // Don't overwrite local timer — it ticks every second smoothly
+        if (prog.done && prog.result) {
+          handleSolveResult(prog.result);
+        }
+      } catch {
+        // Job not found — may have finished and been cleaned up
+        stopPolling();
+        setIsSolving(false);
+        setActiveJobId(null);
+        localStorage.removeItem("solve_job_id");
+      }
+    }, 800);
+  }, [stopPolling, handleSolveResult]);
+
+  // On mount: reconnect to active job if exists
+  useEffect(() => {
+    if (activeJobId) {
+      // Fetch current progress first to get correct elapsed time
+      pollSolveProgress(activeJobId).then((prog) => {
+        if (prog.done && prog.result) {
+          handleSolveResult(prog.result);
+        } else {
+          // Set the start time based on server elapsed so the timer continues correctly
+          solveStartRef.current = Date.now() - prog.elapsed * 1000;
+          setElapsedTimer(Math.round(prog.elapsed));
+          setProgress(prog);
+          startPolling(activeJobId);
+        }
+      }).catch(() => {
+        // Job gone
+        setActiveJobId(null);
+        localStorage.removeItem("solve_job_id");
+      });
+    }
+    return () => stopPolling();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleStartSolve = async () => {
+    setSolveResult(null);
+    setOverlaps([]);
+    setElapsedTimer(0);
+    setProgress(null);
+    try {
+      const { job_id } = await startSolveAsync({
+        school_id: schoolId!,
+        max_time: maxTime,
+        max_solutions: maxSolutions,
+        num_workers: numWorkers,
+      });
+      setActiveJobId(job_id);
+      localStorage.setItem("solve_job_id", job_id);
+      startPolling(job_id);
+    } catch (err) {
       toast.error(`שגיאה ביצירת מערכת: ${String(err)}`);
-    },
-  });
+    }
+  };
 
   const handleAllowOverlap = async (conflict: OverlapConflict) => {
     try {
@@ -484,7 +566,7 @@ export default function SolverPage() {
                 max={600}
                 value={maxTime}
                 onChange={(e) => setMaxTime(Number(e.target.value))}
-                disabled={solveMut.isPending}
+                disabled={isSolving}
               />
             </div>
             <div>
@@ -496,7 +578,7 @@ export default function SolverPage() {
                 max={20}
                 value={maxSolutions}
                 onChange={(e) => setMaxSolutions(Number(e.target.value))}
-                disabled={solveMut.isPending}
+                disabled={isSolving}
               />
             </div>
             <div>
@@ -508,7 +590,7 @@ export default function SolverPage() {
                 max={16}
                 value={numWorkers}
                 onChange={(e) => setNumWorkers(Number(e.target.value))}
-                disabled={solveMut.isPending}
+                disabled={isSolving}
               />
             </div>
           </div>
@@ -532,35 +614,73 @@ export default function SolverPage() {
           )}
 
           <Button
-            onClick={() => {
-              setSolveResult(null);
-              setOverlaps([]);
-              setElapsedTimer(0);
-              solveMut.mutate();
-            }}
-            disabled={solveMut.isPending}
+            onClick={handleStartSolve}
+            disabled={isSolving}
             className="w-full"
             size="lg"
           >
-            {solveMut.isPending ? (
+            {isSolving ? (
               <Loader2 className="h-5 w-5 animate-spin" />
             ) : (
               <Play className="h-5 w-5" />
             )}
-            {solveMut.isPending ? "יוצר מערכת..." : "צור מערכת"}
+            {isSolving ? "יוצר מערכת..." : "צור מערכת"}
           </Button>
 
-          {/* Loading indicator */}
-          {solveMut.isPending && (
+          {/* Progress indicator */}
+          {isSolving && (
             <div className="flex flex-col items-center gap-3 p-6 rounded-lg bg-muted/50 border">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <p className="font-medium">המערכת נבנית...</p>
-              <p className="text-sm text-muted-foreground">
-                {elapsedTimer > 0 && `${elapsedTimer} שניות`}
-                {elapsedTimer > 0 && ` מתוך ${maxTime} מקסימום`}
+              <p className="font-medium">
+                {progress?.step_label ?? "מתחיל..."}
               </p>
+              {/* Progress bar */}
+              <div className="w-full h-3 bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-500"
+                  style={{ width: `${progress?.percent ?? 0}%` }}
+                />
+              </div>
+              <div className="flex gap-4 text-sm text-muted-foreground">
+                {elapsedTimer > 0 && (
+                  <span>{elapsedTimer} שניות</span>
+                )}
+                {progress?.first_solution_time != null && (
+                  <span className="text-green-600 font-medium">
+                    פתרון ראשון: {progress.first_solution_time} שניות
+                  </span>
+                )}
+                {progress && progress.solutions_found > 0 && (
+                  <span>{progress.solutions_found} פתרונות נמצאו</span>
+                )}
+                {progress?.first_solution_time != null && progress.solutions_found > 0 && (
+                  <span>משפר...</span>
+                )}
+                {progress && (
+                  <span>שלב {progress.step_number}/{progress.total_steps}</span>
+                )}
+              </div>
+              {progress && progress.solutions_found > 0 && activeJobId && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      await stopSolver(activeJobId);
+                      toast.success("עוצר — שומר את הפתרון הטוב ביותר");
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      toast.error(`שגיאה בעצירה: ${msg}`);
+                      console.error("Stop error:", err);
+                    }
+                  }}
+                >
+                  <Square className="h-4 w-4" />
+                  עצור ושמור פתרון
+                </Button>
+              )}
               <p className="text-xs text-muted-foreground">
-                תהליך זה יכול להימשך עד {maxTime} שניות. אין לסגור את הדף.
+                אפשר לצאת מהדף — הסולבר ימשיך ברקע
               </p>
             </div>
           )}
@@ -594,10 +714,15 @@ export default function SolverPage() {
                 </Badge>
                 <span className="text-sm text-muted-foreground">
                   {solveResult.solve_time} שניות
+                  {solveResult.first_solution_time != null && (
+                    <span className="text-green-600 mr-2">
+                      (פתרון ראשון: {solveResult.first_solution_time} שניות)
+                    </span>
+                  )}
                 </span>
               </div>
 
-              <p className="text-sm">{solveResult.message}</p>
+              <pre className="text-sm whitespace-pre-wrap break-words font-mono bg-muted/30 p-2 rounded max-h-96 overflow-auto">{solveResult.message}</pre>
 
               {/* Infeasibility diagnosis */}
               {solveResult.status === "INFEASIBLE" &&

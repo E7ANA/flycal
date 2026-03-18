@@ -21,6 +21,13 @@ class Subject(Base):
     blocked_slots: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
     # Limit to at most 1 lesson in the last 2 periods of each day (per class)
     limit_last_periods: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Hide from solver (keep data but don't schedule)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Linked subject group: subjects with same link_group are treated as one for daily limits
+    link_group: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Max combined hours per day for all subjects in the same link_group (per class)
+    link_group_max_per_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    shahaf_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
 
 class SubjectRequirement(Base):
@@ -52,6 +59,10 @@ class SubjectRequirement(Base):
     morning_priority: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Allow teacher to be scheduled elsewhere at the same timeslot (skip no-overlap)
     allow_overlap: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Hide from solver (keep data but don't schedule this specific requirement)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Shahaf StudyItem ID for roundtrip export
+    shahaf_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     class_group: Mapped["ClassGroup"] = relationship(
         back_populates="subject_requirements",

@@ -13,6 +13,7 @@ import {
   Sheet,
   Brain,
   ShieldCheck,
+  Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/authStore";
@@ -30,6 +31,7 @@ const navItems = [
   { to: "/solver", label: "יצירת מערכת", icon: Play },
   { to: "/results", label: "תוצאות", icon: Calendar },
   { to: "/scenarios", label: "תרחישים", icon: FlaskConical },
+  { to: "/import-shahaf", label: "ייבוא משחף", icon: Upload },
 ];
 
 export function Sidebar() {

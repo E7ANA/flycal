@@ -527,6 +527,48 @@ def _compile_max_per_day(
     is_hard = constraint.type == ConstraintType.HARD
 
     if constraint.category == "SUBJECT" and target_id:
+        # Skip this subject entirely if ANY requirement or cluster track
+        # cannot fit within max_val hours/day given teacher availability.
+        # Also skip if consecutive_count > max_val.
+        skip = False
+        for req in data.requirements:
+            if req.subject_id == target_id and not req.is_grouped and req.teacher_id:
+                cc = getattr(req, "consecutive_count", None)
+                if cc and cc > max_val:
+                    skip = True
+                    break
+                # Check if teacher availability forces overflow
+                blocked = data.teacher_blocked_slots.get(req.teacher_id, set())
+                teacher_free_days = set()
+                for day in data.days:
+                    day_blocked = any(d == day or str(d) == str(day) for d, p in blocked)
+                    if not day_blocked:
+                        teacher_free_days.add(day)
+                avail_days = len(teacher_free_days)
+                if avail_days > 0 and req.hours_per_week / avail_days > max_val:
+                    skip = True
+                    break
+        if not skip:
+            for cluster in data.clusters:
+                if cluster.subject_id == target_id:
+                    cc = getattr(cluster, "consecutive_count", None)
+                    if cc and cc > max_val:
+                        skip = True
+                        break
+                    # Check if any track teacher is forced to exceed max_val per day
+                    for t in cluster.tracks:
+                        if t.teacher_id is None:
+                            continue
+                        blocked = data.teacher_blocked_slots.get(t.teacher_id, set())
+                        free = sum(1 for d in data.days if not any(dd == d for dd, p in blocked))
+                        if free > 0 and t.hours_per_week / free > max_val:
+                            skip = True
+                            break
+                    if skip:
+                        break
+        if skip:
+            return
+
         # Regular (non-grouped) requirements
         for req in data.requirements:
             if req.subject_id == target_id and not req.is_grouped and req.teacher_id:
@@ -866,7 +908,8 @@ def _compile_max_teaching_days(
     if constraint.category != "TEACHER" or not target_id:
         return
 
-    by_day = _vars_for_teacher_by_day(variables, data, target_id)
+    # Include meetings — a day with only meetings is NOT a free day
+    by_day = _vars_for_teacher_by_day(variables, data, target_id, include_meetings=True)
     day_active: list[cp_model.IntVar] = []
     for day, day_vars in by_day.items():
         b = model.new_bool_var(f"teach_day_{constraint.id}_{day}")
@@ -1887,6 +1930,151 @@ def _compile_class_end_time(
 
 
 # ---------------------------------------------------------------------------
+# TEACHER_DAY_END_LIMIT — teacher must finish num_days days by end_period
+# ---------------------------------------------------------------------------
+
+def _compile_teacher_day_end_limit(
+    model: cp_model.CpModel, data: SolverData,
+    variables: SolverVariables, constraint: Constraint,
+) -> None:
+    """TEACHER_DAY_END_LIMIT: on at least `num_days` of the teacher's work days,
+    the teacher must finish by period `end_period` (no lessons after it).
+
+    Parameters:
+        num_days: int — how many days must end early
+        end_period: int — latest allowed period on those days
+    """
+    num_days = constraint.parameters.get("num_days")
+    end_period = constraint.parameters.get("end_period")
+    if num_days is None or end_period is None:
+        return
+
+    is_hard = constraint.type == ConstraintType.HARD
+
+    if constraint.target_id:
+        teacher_ids = [constraint.target_id]
+    else:
+        teacher_ids = list({r.teacher_id for r in data.requirements if r.teacher_id} |
+                          {t.teacher_id for cl in data.clusters for t in cl.tracks if t.teacher_id})
+
+    for tid in teacher_ids:
+        slot_vars = _vars_for_teacher_with_meetings(variables, data, tid)
+
+        # For each day, create a bool: "teacher finishes by end_period on this day"
+        early_finish_bools: list[cp_model.IntVar] = []
+        for day in data.days:
+            # Collect vars for periods AFTER end_period
+            late_vars: list[cp_model.IntVar] = []
+            for (d, p), vlist in slot_vars.items():
+                if d == day and p > end_period:
+                    late_vars.extend(vlist)
+
+            if not late_vars:
+                # No possible late slots — day always finishes early
+                b = model.new_constant(1)
+                early_finish_bools.append(b)
+                continue
+
+            # b=1 iff no late lessons
+            b = model.new_bool_var(
+                f"t{tid}_early_{day}_{constraint.id}"
+            )
+            total_late = model.new_int_var(
+                0, len(late_vars),
+                f"t{tid}_late_cnt_{day}_{constraint.id}",
+            )
+            model.add(total_late == sum(late_vars))
+            model.add(total_late == 0).only_enforce_if(b)
+            model.add(total_late >= 1).only_enforce_if(b.negated())
+            early_finish_bools.append(b)
+
+        if not early_finish_bools:
+            continue
+
+        # Sum of days finishing early must be >= num_days
+        early_sum = model.new_int_var(
+            0, len(early_finish_bools),
+            f"t{tid}_early_sum_{constraint.id}",
+        )
+        model.add(early_sum == sum(early_finish_bools))
+
+        if is_hard:
+            model.add(early_sum >= num_days)
+        else:
+            # Penalty = max(0, num_days - early_sum)
+            shortfall = model.new_int_var(
+                0, num_days,
+                f"t{tid}_early_short_{constraint.id}",
+            )
+            model.add_max_equality(shortfall, [num_days - early_sum, model.new_constant(0)])
+            _add_soft_penalty(model, variables, constraint, shortfall, label=str(tid))
+
+
+# ---------------------------------------------------------------------------
+# TEACHER_PREFERRED_FREE_DAY — teacher prefers specific day(s) as free day
+# ---------------------------------------------------------------------------
+
+def _compile_teacher_preferred_free_day(
+    model: cp_model.CpModel, data: SolverData,
+    variables: SolverVariables, constraint: Constraint,
+) -> None:
+    """TEACHER_PREFERRED_FREE_DAY: teacher should have their free day on one
+    of the preferred days.
+
+    Parameters:
+        preferred_days: list[str] — e.g. ["TUESDAY", "WEDNESDAY"]
+    """
+    preferred_days = constraint.parameters.get("preferred_days", [])
+    if not preferred_days:
+        return
+
+    is_hard = constraint.type == ConstraintType.HARD
+
+    if constraint.target_id:
+        teacher_ids = [constraint.target_id]
+    else:
+        teacher_ids = list({r.teacher_id for r in data.requirements if r.teacher_id} |
+                          {t.teacher_id for cl in data.clusters for t in cl.tracks if t.teacher_id})
+
+    for tid in teacher_ids:
+        slot_vars = _vars_for_teacher_with_meetings(variables, data, tid)
+
+        # For each preferred day, check if teacher has NO lessons (i.e., it's a free day)
+        free_on_preferred: list[cp_model.IntVar] = []
+        for day in preferred_days:
+            day_vars: list[cp_model.IntVar] = []
+            for (d, p), vlist in slot_vars.items():
+                if d == day:
+                    day_vars.extend(vlist)
+
+            if not day_vars:
+                # No possible vars — day is always free
+                free_on_preferred.append(model.new_constant(1))
+                continue
+
+            is_free = model.new_bool_var(f"t{tid}_free_{day}_{constraint.id}")
+            total = model.new_int_var(0, len(day_vars), f"t{tid}_day_total_{day}_{constraint.id}")
+            model.add(total == sum(day_vars))
+            model.add(total == 0).only_enforce_if(is_free)
+            model.add(total >= 1).only_enforce_if(is_free.negated())
+            free_on_preferred.append(is_free)
+
+        if not free_on_preferred:
+            continue
+
+        # At least one of the preferred days must be free
+        if is_hard:
+            model.add(sum(free_on_preferred) >= 1)
+        else:
+            has_free = model.new_bool_var(f"t{tid}_has_pref_free_{constraint.id}")
+            model.add(sum(free_on_preferred) >= 1).only_enforce_if(has_free)
+            model.add(sum(free_on_preferred) == 0).only_enforce_if(has_free.negated())
+            no_free = model.new_bool_var(f"t{tid}_no_pref_free_{constraint.id}")
+            model.add(no_free == 1 - has_free)
+            _add_soft_penalty(model, variables, constraint, no_free, label=str(tid))
+
+
+# ---------------------------------------------------------------------------
 # Compiler dispatch table
 # ---------------------------------------------------------------------------
 
@@ -1924,4 +2112,6 @@ _COMPILERS = {
     RuleType.COMPACT_SCHOOL_DAY: _compile_compact_school_day,
     RuleType.HOMEROOM_EARLY: _compile_homeroom_early,
     RuleType.CLASS_END_TIME: _compile_class_end_time,
+    RuleType.TEACHER_DAY_END_LIMIT: _compile_teacher_day_end_limit,
+    RuleType.TEACHER_PREFERRED_FREE_DAY: _compile_teacher_preferred_free_day,
 }

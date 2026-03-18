@@ -19,6 +19,7 @@ class MeetingType(str, enum.Enum):
     COORDINATORS = "COORDINATORS"  # רכזים
     MANAGEMENT = "MANAGEMENT"  # ניהול
     CUSTOM = "CUSTOM"  # מותאם אישית
+    PLENARY = "PLENARY"  # מליאה
 
 
 class Meeting(Base):
@@ -41,6 +42,8 @@ class Meeting(Base):
     require_consecutive: Mapped[bool] = mapped_column(Boolean, default=False)
     # Teachers who MUST attend even when is_mandatory_attendance=False
     locked_teacher_ids: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
+    # Alternative pinned slots — solver picks primary OR alternative (PLENARY only)
+    alternative_slots: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
 
     teachers: Mapped[list["Teacher"]] = relationship(secondary=meeting_teachers)
 

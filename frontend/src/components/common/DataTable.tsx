@@ -14,6 +14,7 @@ interface DataTableProps<T> {
   data: T[];
   keyField: keyof T;
   onRowClick?: (row: T) => void;
+  rowClassName?: (row: T) => string | undefined;
   emptyMessage?: string;
   compact?: boolean;
   searchable?: boolean;
@@ -25,6 +26,7 @@ export function DataTable<T>({
   data,
   keyField,
   onRowClick,
+  rowClassName,
   emptyMessage = "אין נתונים",
   compact = false,
   searchable = false,
@@ -97,6 +99,7 @@ export function DataTable<T>({
                   className={cn(
                     "border-t transition-colors hover:bg-muted/50",
                     onRowClick && "cursor-pointer",
+                    rowClassName?.(row),
                   )}
                 >
                   {columns.map((col, i) => (

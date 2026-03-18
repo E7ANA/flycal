@@ -25,22 +25,43 @@ def detect_conflicts(
         .all()
     )
 
+    # Build name maps
+    teacher_names: dict[int, str] = {}
+    class_names: dict[int, str] = {}
+    for cg in data.class_groups:
+        class_names[cg.id] = cg.name
+    for req in data.requirements:
+        if req.teacher_id and req.teacher:
+            teacher_names[req.teacher_id] = req.teacher.name
+    for cluster in data.clusters:
+        for track in cluster.tracks:
+            if track.teacher_id and track.teacher:
+                teacher_names[track.teacher_id] = track.teacher.name
+    for meeting in getattr(data, "meetings", []):
+        for t in meeting.teachers:
+            teacher_names[t.id] = t.name
+
+    def tname(tid: int) -> str:
+        return teacher_names.get(tid, f"מורה #{tid}")
+
+    def cname(cid: int) -> str:
+        return class_names.get(cid, f"כיתה #{cid}")
+
     issues: list[ConflictIssue] = []
-    issues.extend(_check_teacher_blocked_all_days(data, constraints))
-    issues.extend(_check_teacher_insufficient_slots(data, constraints))
-    issues.extend(_check_class_blocked_all_days(data, constraints))
+    issues.extend(_check_teacher_blocked_all_days(data, constraints, tname))
+    issues.extend(_check_teacher_insufficient_slots(data, constraints, tname))
+    issues.extend(_check_class_blocked_all_days(data, constraints, cname))
     issues.extend(_check_contradicting_time_rules(constraints))
-    issues.extend(_check_cluster_teacher_conflicts(data, constraints))
+    issues.extend(_check_cluster_teacher_conflicts(data, constraints, tname))
     return issues
 
 
 def _check_teacher_blocked_all_days(
-    data: SolverData, constraints: list[Constraint],
+    data: SolverData, constraints: list[Constraint], tname,
 ) -> list[ConflictIssue]:
     """If a teacher has HARD BLOCK_DAY for all school days, it's impossible."""
     issues: list[ConflictIssue] = []
 
-    # Group HARD BLOCK_DAY by teacher
     teacher_blocks: dict[int, list[Constraint]] = {}
     for c in constraints:
         if (c.rule_type == RuleType.BLOCK_DAY
@@ -53,7 +74,6 @@ def _check_teacher_blocked_all_days(
         blocked_days = {c.parameters.get("day") for c in blocks}
         available_days = set(data.days) - blocked_days
         if not available_days:
-            # Check if this teacher actually has assignments
             has_assignments = any(
                 r.teacher_id == teacher_id
                 for r in data.requirements if not r.is_grouped
@@ -64,7 +84,7 @@ def _check_teacher_blocked_all_days(
             if has_assignments:
                 issues.append(ConflictIssue(
                     level="error",
-                    message=f"מורה #{teacher_id} חסום/ה בכל הימים אך יש לו/ה שיעורים מוקצים",
+                    message=f"מורה {tname(teacher_id)} חסום/ה בכל הימים אך יש לו/ה שיעורים מוקצים",
                     constraint_ids=[c.id for c in blocks],
                 ))
 
@@ -72,12 +92,11 @@ def _check_teacher_blocked_all_days(
 
 
 def _check_teacher_insufficient_slots(
-    data: SolverData, constraints: list[Constraint],
+    data: SolverData, constraints: list[Constraint], tname,
 ) -> list[ConflictIssue]:
     """Check if teacher's available slots (after blocks) can fit their hours."""
     issues: list[ConflictIssue] = []
 
-    # Calculate teacher hours
     teacher_hours: dict[int, int] = {}
     for req in data.requirements:
         if req.is_grouped or req.teacher_id is None:
@@ -92,13 +111,8 @@ def _check_teacher_insufficient_slots(
                     teacher_hours.get(track.teacher_id, 0) + track.hours_per_week
                 )
 
-    # NOTE: meeting hours are NOT counted here — meetings are scheduled
-    # via separate x_meeting variables and don't compete for teaching slots.
-
-    # Calculate blocked slots per teacher (start with teacher-level blocked_slots)
     for teacher_id, hours in teacher_hours.items():
         blocked_slots: set[tuple[str, int]] = set()
-        # Include teacher's own blocked slots
         if teacher_id in data.teacher_blocked_slots:
             blocked_slots.update(data.teacher_blocked_slots[teacher_id])
         related_ids: list[int] = []
@@ -133,20 +147,18 @@ def _check_teacher_insufficient_slots(
                         blocked_slots.add((d, p))
                 related_ids.append(c.id)
 
-        # Use set subtraction (not arithmetic) — blocked_slots may contain
-        # phantom slots (periods that don't exist in the school timetable).
         available_set = set(data.available_slots)
         available = len(available_set - blocked_slots)
         if hours > available:
             issues.append(ConflictIssue(
                 level="error",
-                message=f"מורה #{teacher_id}: {hours} שעות נדרשות אך רק {available} משבצות פנויות אחרי חסימות",
+                message=f"מורה {tname(teacher_id)}: {hours} שעות נדרשות אך רק {available} משבצות פנויות אחרי חסימות",
                 constraint_ids=related_ids,
             ))
         elif available > 0 and hours > available * 0.85:
             issues.append(ConflictIssue(
                 level="warning",
-                message=f"מורה #{teacher_id}: {hours}/{available} משבצות פנויות — מרווח צפוף",
+                message=f"מורה {tname(teacher_id)}: {hours}/{available} משבצות פנויות — מרווח צפוף",
                 constraint_ids=related_ids,
             ))
 
@@ -154,7 +166,7 @@ def _check_teacher_insufficient_slots(
 
 
 def _check_class_blocked_all_days(
-    data: SolverData, constraints: list[Constraint],
+    data: SolverData, constraints: list[Constraint], cname,
 ) -> list[ConflictIssue]:
     """If a class is blocked on all days, it's impossible."""
     issues: list[ConflictIssue] = []
@@ -178,7 +190,7 @@ def _check_class_blocked_all_days(
             if has_requirements:
                 issues.append(ConflictIssue(
                     level="error",
-                    message=f"כיתה #{class_id} חסומה בכל הימים אך יש לה שיעורים",
+                    message=f"כיתה {cname(class_id)} חסומה בכל הימים אך יש לה שיעורים",
                     constraint_ids=[c.id for c in blocks],
                 ))
 
@@ -186,27 +198,19 @@ def _check_class_blocked_all_days(
 
 
 def _check_cluster_teacher_conflicts(
-    data: SolverData, constraints: list[Constraint],
+    data: SolverData, constraints: list[Constraint], tname,
 ) -> list[ConflictIssue]:
-    """Check that grouped track teachers share enough available slots.
-
-    All tracks in a cluster must run simultaneously (SYNC_TRACKS), so the
-    intersection of all track teachers' available slots (after blocked_slots
-    AND constraint-based blocks) must be >= hours_per_week.
-    """
+    """Check that grouped track teachers share enough available slots."""
     issues: list[ConflictIssue] = []
     available_set = set(data.available_slots)
 
-    # Pre-compute each teacher's effective blocked slots (blocked_slots + constraints)
     def get_teacher_blocked(teacher_id: int) -> tuple[set[tuple[str, int]], list[int]]:
         blocked: set[tuple[str, int]] = set()
         related_ids: list[int] = []
 
-        # Teacher's own blocked_slots
         if teacher_id in data.teacher_blocked_slots:
             blocked.update(data.teacher_blocked_slots[teacher_id])
 
-        # Constraint-based blocks
         for c in constraints:
             if c.type != ConstraintType.HARD or c.target_id != teacher_id:
                 continue
@@ -239,6 +243,14 @@ def _check_cluster_teacher_conflicts(
 
         return blocked, related_ids
 
+    # Build source class names per cluster
+    cluster_class_names: dict[int, list[str]] = {}
+    class_name_map = {cg.id: cg.name for cg in data.class_groups}
+    for cluster in data.clusters:
+        cluster_class_names[cluster.id] = [
+            class_name_map.get(sc.id, f"#{sc.id}") for sc in cluster.source_classes
+        ]
+
     for cluster in data.clusters:
         tracks_with_teacher = [t for t in cluster.tracks if t.teacher_id is not None]
         if len(tracks_with_teacher) < 2:
@@ -255,18 +267,18 @@ def _check_cluster_teacher_conflicts(
             teacher_free = available_set - blocked
             common_slots &= teacher_free
             all_related_ids.extend(related_ids)
+            teacher_labels.append(tname(tid))
 
-            teacher_obj = track.teacher
-            teacher_labels.append(
-                teacher_obj.name if teacher_obj else f"#{tid}"
-            )
+        # Class names for context
+        cls_names = cluster_class_names.get(cluster.id, [])
+        cls_str = f" [כיתות: {', '.join(cls_names)}]" if cls_names else ""
 
         common_count = len(common_slots)
         if hours_needed > common_count:
             issues.append(ConflictIssue(
                 level="error",
                 message=(
-                    f"הקבצה '{cluster.name}': נדרשות {hours_needed} שעות "
+                    f"הקבצה '{cluster.name}'{cls_str}: נדרשות {hours_needed} שעות "
                     f"אך רק {common_count} משבצות משותפות למורים "
                     f"({', '.join(teacher_labels)}) — "
                     f"בדוק חסימות שחוסמות ימים/שעות שונים למורים שונים"
@@ -277,7 +289,7 @@ def _check_cluster_teacher_conflicts(
             issues.append(ConflictIssue(
                 level="warning",
                 message=(
-                    f"הקבצה '{cluster.name}': {hours_needed}/{common_count} "
+                    f"הקבצה '{cluster.name}'{cls_str}: {hours_needed}/{common_count} "
                     f"משבצות משותפות למורים ({', '.join(teacher_labels)}) — מרווח צפוף"
                 ),
                 constraint_ids=all_related_ids,
@@ -292,7 +304,6 @@ def _check_contradicting_time_rules(
     """Detect contradicting hard time constraints on the same target."""
     issues: list[ConflictIssue] = []
 
-    # Check MAX_TEACHING_DAYS + MIN_FREE_DAYS contradiction
     for c1 in constraints:
         if c1.type != ConstraintType.HARD:
             continue
@@ -307,7 +318,7 @@ def _check_contradicting_time_rules(
                     and c2.rule_type == RuleType.MIN_FREE_DAYS):
                 max_days = c1.parameters.get("max_days", 99)
                 min_free = c2.parameters.get("min_days", 0)
-                if max_days + min_free > 6:  # max possible school days
+                if max_days + min_free > 6:
                     issues.append(ConflictIssue(
                         level="error",
                         message=f"סתירה: מקסימום {max_days} ימי הוראה + מינימום {min_free} ימים חופשיים > 6 ימים",

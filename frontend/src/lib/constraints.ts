@@ -42,6 +42,8 @@ export const RULE_TYPE_LABELS: Record<RuleType, string> = {
   COMPACT_SCHOOL_DAY: "יום רציף מלא",
   HOMEROOM_EARLY: "מחנכת בתחילת היום",
   CLASS_END_TIME: "סוף יום לכיתה (שעת סיום)",
+  TEACHER_DAY_END_LIMIT: "מגבלת סיום יום",
+  TEACHER_PREFERRED_FREE_DAY: "בחירת יום חופשי",
 };
 
 export const DAY_LABELS: Record<string, string> = {

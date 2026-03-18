@@ -91,6 +91,7 @@ def list_requirements(
     subject_id: int | None = None,
     teacher_id: int | None = None,
     grade_id: int | None = None,
+    include_grouped: bool = True,
     db: Session = Depends(get_db),
 ):
     q = db.query(SubjectRequirement)
@@ -106,6 +107,8 @@ def list_requirements(
         q = q.join(ClassGroup, SubjectRequirement.class_group_id == ClassGroup.id).filter(
             ClassGroup.grade_id == grade_id
         )
+    if not include_grouped:
+        q = q.filter(SubjectRequirement.is_grouped == False)
     return q.all()
 
 
@@ -125,6 +128,9 @@ def update_requirement(
     if not req:
         raise HTTPException(status_code=404, detail="דרישת מקצוע לא נמצאה")
     for key, value in data.model_dump(exclude_unset=True).items():
+        # Normalize empty lists to None for JSON fields
+        if key in ("pinned_slots", "blocked_slots", "co_teacher_ids") and value == []:
+            value = None
         setattr(req, key, value)
     db.commit()
     db.refresh(req)

@@ -11,6 +11,7 @@ class SchoolCreate(BaseModel):
     break_slots: list[int] = []
     week_start_day: WeekStartDay = WeekStartDay.SUNDAY
     periods_per_day_map: dict[str, int] | None = None
+    max_consecutive_meetings: int = 4
 
 
 class SchoolUpdate(BaseModel):
@@ -21,6 +22,7 @@ class SchoolUpdate(BaseModel):
     break_slots: list[int] | None = None
     week_start_day: WeekStartDay | None = None
     periods_per_day_map: dict[str, int] | None = None
+    max_consecutive_meetings: int | None = None
 
 
 class SchoolRead(BaseModel):
@@ -32,5 +34,6 @@ class SchoolRead(BaseModel):
     break_slots: list[int]
     week_start_day: WeekStartDay
     periods_per_day_map: dict[str, int] | None
+    max_consecutive_meetings: int = 4
 
     model_config = {"from_attributes": True}

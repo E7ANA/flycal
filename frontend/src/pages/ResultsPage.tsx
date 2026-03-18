@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, BarChart3, Eye, Download, AlertTriangle } from "lucide-react";
+import { Trash2, BarChart3, Eye, Download, AlertTriangle, Users, Check, X } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
+import { useAuthStore } from "@/stores/authStore";
 import {
   fetchSolutions,
   deleteSolution,
@@ -14,6 +15,7 @@ import {
   fetchScheduledMeetings,
   fetchTeacherPresence,
   fetchMeetingAbsences,
+  fetchPlenaryAttendance,
 } from "@/api/solver";
 import { fetchMeetings } from "@/api/meetings";
 import { fetchClasses } from "@/api/classes";
@@ -27,7 +29,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/common/Ca
 import { Select } from "@/components/common/Select";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { TimetableGrid } from "@/components/timetable/TimetableGrid";
-import { DAYS_ORDER } from "@/lib/constraints";
+import { DAY_LABELS, DAYS_ORDER } from "@/lib/constraints";
 import type { Solution } from "@/types/models";
 
 export default function ResultsPage() {
@@ -115,6 +117,12 @@ export default function ResultsPage() {
     queryKey: ["meeting-absences", schoolId],
     queryFn: () => fetchMeetingAbsences(schoolId!),
     enabled: !!schoolId,
+  });
+
+  const { data: plenaryAttendance = [] } = useQuery({
+    queryKey: ["plenary-attendance", selectedSolutionId],
+    queryFn: () => fetchPlenaryAttendance(selectedSolutionId!),
+    enabled: selectedSolutionId !== null,
   });
 
   const { data: clusters = [] } = useQuery({
@@ -258,18 +266,67 @@ export default function ResultsPage() {
               {sol.solve_time_seconds}s
             </span>
             <span className="text-xs text-muted-foreground me-auto">
-              {new Date(sol.created_at).toLocaleString("he-IL")}
+              {new Date(sol.created_at).toLocaleString("he-IL", { timeZone: "Asia/Jerusalem" })}
             </span>
             <Button
               variant="ghost"
               size="icon"
               onClick={(e) => {
                 e.stopPropagation();
-                window.open(`/api/solutions/${sol.id}/export/excel`, "_blank");
+                {
+                  const token = useAuthStore.getState().token;
+                  fetch(`/api/solutions/${sol.id}/export/excel`, {
+                    headers: token ? { Authorization: `Bearer ${token}` } : {},
+                  })
+                    .then((res) => {
+                      if (!res.ok) throw new Error("Export failed");
+                      return res.blob();
+                    })
+                    .then((blob) => {
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `timetable_solution_${sol.id}.xlsx`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    })
+                    .catch(() => toast.error("שגיאה בהורדת קובץ"));
+                }
               }}
               title="ייצוא Excel"
             >
               <Download className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={(e) => {
+                e.stopPropagation();
+                const token = useAuthStore.getState().token;
+                fetch(`/api/solutions/${sol.id}/export/shahaf`, {
+                  headers: token ? { Authorization: `Bearer ${token}` } : {},
+                })
+                  .then((res) => {
+                    if (!res.ok) return res.json().then((err) => { throw new Error(err?.detail ?? "Export failed"); });
+                    const matched = res.headers.get("X-Shahaf-Matched") ?? "?";
+                    const unmatched = res.headers.get("X-Shahaf-Unmatched") ?? "0";
+                    toast.success(`ייצוא לשחף: ${matched} שיעורים מופו, ${unmatched} לא מופו`);
+                    return res.blob();
+                  })
+                  .then((blob) => {
+                    if (!blob) return;
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `shahaf_updated_${sol.id}.zip`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  })
+                  .catch((err) => toast.error(`שגיאה בייצוא לשחף: ${err instanceof Error ? err.message : String(err)}`));
+              }}
+              title="ייצוא לשחף"
+            >
+              <Download className="h-4 w-4 text-indigo-500" />
             </Button>
             <Button
               variant="ghost"
@@ -316,8 +373,8 @@ export default function ResultsPage() {
                   <div className="space-y-2">
                     <p className="text-sm font-medium">אילוצים רכים:</p>
                     {scoreBreakdown.soft_scores.map((s) => (
+                      <React.Fragment key={s.constraint_id}>
                       <div
-                        key={s.constraint_id}
                         className="flex items-center gap-3"
                       >
                         <div className="flex-1 min-w-0">
@@ -348,6 +405,27 @@ export default function ResultsPage() {
                           משקל {s.weight}
                         </Badge>
                       </div>
+                      {/* Per-class/label breakdown */}
+                      {s.label_breakdown && s.label_breakdown.length > 0 && s.satisfaction < 1 && (
+                        <div className="mr-4 mb-2 flex flex-wrap gap-1">
+                          {s.label_breakdown.map((lb) => (
+                            <Badge
+                              key={lb.label}
+                              variant="outline"
+                              className={`text-xs ${
+                                lb.satisfaction >= 1
+                                  ? "border-emerald-300 text-emerald-700"
+                                  : lb.satisfaction > 0.5
+                                    ? "border-amber-300 text-amber-700"
+                                    : "border-red-300 text-red-700"
+                              }`}
+                            >
+                              {lb.label}: {Math.round(lb.satisfaction * 100)}%
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                    </React.Fragment>
                     ))}
                   </div>
                 )}
@@ -392,6 +470,90 @@ export default function ResultsPage() {
                     ),
                   )}
                 </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Plenary Attendance */}
+          {plenaryAttendance.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="h-5 w-5 text-rose-400" />
+                  ישיבת מליאה
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {plenaryAttendance.map((pa) => (
+                  <div key={pa.meeting_id} className="space-y-3">
+                    <div className="flex items-center gap-3">
+                      <span className="font-medium">{pa.meeting_name}</span>
+                      <Badge variant="outline">
+                        {pa.plenary_days.map((d) => DAY_LABELS[d] ?? d).join(", ")}
+                      </Badge>
+                      <Badge variant="success">
+                        {pa.attending_count}/{pa.total_teachers} נוכחים
+                      </Badge>
+                    </div>
+
+                    {pa.preferred_attending.length > 0 && (
+                      <div>
+                        <span className="text-xs font-medium text-emerald-700 mb-1 block">
+                          <Check className="h-3 w-3 inline ml-1" />
+                          נוכחות מועדפת — נוכחים ({pa.preferred_attending.length})
+                        </span>
+                        <div className="flex flex-wrap gap-1">
+                          {pa.preferred_attending.map((t) => (
+                            <Badge key={t.id} className="text-xs bg-emerald-100 text-emerald-800 border-emerald-300" variant="outline">
+                              {t.name}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {pa.preferred_absent.length > 0 && (
+                      <div>
+                        <span className="text-xs font-medium text-orange-600 mb-1 block">
+                          <X className="h-3 w-3 inline ml-1" />
+                          נוכחות מועדפת — לא נוכחים ({pa.preferred_absent.length})
+                        </span>
+                        <div className="flex flex-wrap gap-1">
+                          {pa.preferred_absent.map((t) => (
+                            <Badge key={t.id} className="text-xs bg-orange-50 text-orange-700 border-orange-200" variant="outline">
+                              {t.name}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Trade-off analysis */}
+                    {pa.tradeoffs && pa.tradeoffs.length > 0 && (
+                      <div className="rounded-md border border-indigo-200 bg-indigo-50/40 p-3 space-y-2">
+                        <span className="text-xs font-semibold text-indigo-800 block">
+                          ניתוח מה-אם: שחרור מורה נעול/ה יכול להוסיף נוכחים
+                        </span>
+                        {pa.tradeoffs.map((tf) => (
+                          <div key={tf.locked_teacher.id} className="text-xs border-t border-indigo-200 pt-2">
+                            <span className="text-indigo-900">
+                              אם <strong>{tf.locked_teacher.name}</strong> לא הייתה נעולה →
+                              מליאה ביום <strong>{tf.potential_day_label}</strong> →
+                              {" "}<strong className="text-emerald-700">+{tf.gained_count}</strong> מורים נוספים:
+                            </span>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {tf.gained_teachers.map((gt) => (
+                                <Badge key={gt.id} className="text-xs bg-emerald-50 text-emerald-700 border-emerald-300" variant="outline">
+                                  {gt.name}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </CardContent>
             </Card>
           )}

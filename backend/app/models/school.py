@@ -1,6 +1,6 @@
 import enum
 
-from sqlalchemy import JSON, Enum, Integer, String
+from sqlalchemy import JSON, Enum, Integer, LargeBinary, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -26,3 +26,7 @@ class School(Base):
     # Optional per-day period counts, e.g. {"SUNDAY": 8, "FRIDAY": 4}
     # When set, overrides periods_per_day for the specified days.
     periods_per_day_map: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Max consecutive meeting hours without a frontal lesson break (0 = no limit)
+    max_consecutive_meetings: Mapped[int] = mapped_column(Integer, default=4)
+    # Original Shahaf backup ZIP (stored on import, used for export)
+    shahaf_backup: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)

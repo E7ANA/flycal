@@ -7,10 +7,11 @@ import { fetchRequirements, updateRequirement } from "@/api/subjects";
 import { fetchSubjects } from "@/api/subjects";
 import { fetchClasses } from "@/api/classes";
 import { fetchGrades } from "@/api/grades";
-import { fetchTeachers } from "@/api/teachers";
-import { fetchGroupingClusters, updateGroupingCluster } from "@/api/groupings";
+import { fetchTeachers, updateTeacher } from "@/api/teachers";
+import { fetchGroupingClusters, updateGroupingCluster, updateTrack } from "@/api/groupings";
 import { DataTable } from "@/components/common/DataTable";
 import { Badge } from "@/components/common/Badge";
+import { computeAllClassHours } from "@/lib/classHours";
 import type { SubjectRequirement, Subject, ClassGroup, Grade, Teacher } from "@/types/models";
 
 function InlineSelect({
@@ -80,6 +81,64 @@ function InlineNumber({
   );
 }
 
+function TeacherSelect({
+  value,
+  subjectId,
+  teachers,
+  onSave,
+  onCancel,
+}: {
+  value: number | null;
+  subjectId: number;
+  teachers: Teacher[];
+  onSave: (teacherId: number | null, needsSubjectAssign: boolean) => void;
+  onCancel: () => void;
+}) {
+  const [selected, setSelected] = useState<string>(value != null ? String(value) : "");
+  const cmp = (a: Teacher, b: Teacher) => a.name.localeCompare(b.name, "he");
+  const assigned = teachers.filter((t) => t.subject_ids.includes(subjectId)).sort(cmp);
+  const unassigned = teachers.filter((t) => !t.subject_ids.includes(subjectId)).sort(cmp);
+
+  const handleSave = () => {
+    const tid = selected ? Number(selected) : null;
+    const needsAssign = tid != null && unassigned.some((t) => t.id === tid);
+    onSave(tid, needsAssign);
+  };
+
+  return (
+    <div className="flex items-center gap-1">
+      <select
+        value={selected}
+        onChange={(e) => setSelected(e.target.value)}
+        className="rounded border border-input bg-background px-1 py-0.5 text-sm max-w-[200px]"
+        autoFocus
+      >
+        <option value="">לא הוקצה</option>
+        {assigned.length > 0 && (
+          <optgroup label="מורים של המקצוע">
+            {assigned.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </optgroup>
+        )}
+        {unassigned.length > 0 && (
+          <optgroup label="מורים אחרים (ישויכו למקצוע)">
+            {unassigned.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </optgroup>
+        )}
+      </select>
+      <button onClick={handleSave} className="text-green-600 hover:text-green-700">
+        <Check className="h-3.5 w-3.5" />
+      </button>
+      <button onClick={onCancel} className="text-red-500 hover:text-red-600">
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
 export default function GalionPage() {
   const schoolId = useSchoolStore((s) => s.activeSchoolId);
   const qc = useQueryClient();
@@ -93,7 +152,12 @@ export default function GalionPage() {
   // Inline editing state
   const [editingCell, setEditingCell] = useState<{
     id: number;
-    field: "teacher_id" | "hours_per_week" | "morning_priority";
+    field: "teacher_id" | "hours_per_week" | "morning_priority" | "class_group_id";
+  } | null>(null);
+
+  // Inline editing for track teacher within a cluster
+  const [editingTrackTeacher, setEditingTrackTeacher] = useState<{
+    trackId: number;
   } | null>(null);
 
   const { data: requirements = [] } = useQuery({
@@ -139,6 +203,17 @@ export default function GalionPage() {
       qc.invalidateQueries({ queryKey: ["requirements", schoolId] });
       toast.success("עודכן");
       setEditingCell(null);
+    },
+    onError: () => toast.error("שגיאה בעדכון"),
+  });
+
+  const updateTrackMut = useMutation({
+    mutationFn: ({ id, payload }: { id: number; payload: { teacher_id: number | null } }) =>
+      updateTrack(id, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["grouping-clusters", schoolId] });
+      toast.success("מורה עודכן");
+      setEditingTrackTeacher(null);
     },
     onError: () => toast.error("שגיאה בעדכון"),
   });
@@ -251,6 +326,30 @@ export default function GalionPage() {
 
   const totalHours = filteredReqs.reduce((sum, r) => sum + r.hours_per_week, 0);
 
+  // Per-class hours summary (deduplicated)
+  const classHoursSummary = useMemo(
+    () => computeAllClassHours(requirements, clusters),
+    [requirements, clusters],
+  );
+
+  // Build summary rows sorted by grade then class name
+  const classSummaryRows = useMemo(() => {
+    return classes
+      .map((c) => ({
+        ...c,
+        grade: gradeMap[c.grade_id],
+        hours: classHoursSummary[c.id] ?? { regular: 0, grouped: 0, shared: 0, total: 0 },
+      }))
+      .filter((c) => c.hours.total > 0)
+      .filter((c) => gradeFilter === "" || c.grade_id === gradeFilter)
+      .filter((c) => classFilter === "" || c.id === classFilter)
+      .sort((a, b) => {
+        const gl = (a.grade?.level ?? 0) - (b.grade?.level ?? 0);
+        if (gl !== 0) return gl;
+        return a.name.localeCompare(b.name, "he");
+      });
+  }, [classes, classHoursSummary, gradeMap, gradeFilter, classFilter]);
+
   if (!schoolId) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -353,7 +452,35 @@ export default function GalionPage() {
                   </span>
                 );
               }
-              return classMap[r.class_group_id]?.name ?? "—";
+              if (editingCell?.id === r.id && editingCell.field === "class_group_id") {
+                return (
+                  <InlineSelect
+                    value={r.class_group_id}
+                    options={classes.map((c) => {
+                      const g = gradeMap[c.grade_id];
+                      return { value: c.id, label: `${g?.name ?? ""} ${c.name}` };
+                    })}
+                    onSave={(val) =>
+                      updateMut.mutate({
+                        id: r.id,
+                        payload: { class_group_id: Number(val) },
+                      })
+                    }
+                    onCancel={() => setEditingCell(null)}
+                  />
+                );
+              }
+              return (
+                <span
+                  className="cursor-pointer hover:text-primary transition-colors"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditingCell({ id: r.id, field: "class_group_id" });
+                  }}
+                >
+                  {classMap[r.class_group_id]?.name ?? "—"}
+                </span>
+              );
             },
           },
           {
@@ -375,33 +502,70 @@ export default function GalionPage() {
           {
             header: "מורה",
             accessor: (r) => {
-              // Grouped: show track teachers from cluster
+              // Grouped: show track teachers from cluster — each clickable
               if (r.is_grouped && r.grouping_cluster_id) {
                 const cluster = clusterMap[r.grouping_cluster_id];
                 if (!cluster) return "—";
-                const names = cluster.tracks
-                  .map((t) => t.teacher_id ? teacherMap[t.teacher_id]?.name : null)
-                  .filter(Boolean);
+                const tracksWithTeacher = cluster.tracks.filter((t) => t.teacher_id !== null || true);
+                if (tracksWithTeacher.length === 0) return "—";
                 return (
-                  <span className="text-muted-foreground text-xs">
-                    {names.length > 0 ? names.join(", ") : "—"}
-                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {tracksWithTeacher.map((track) => {
+                      if (editingTrackTeacher?.trackId === track.id) {
+                        return (
+                          <TeacherSelect
+                            key={track.id}
+                            value={track.teacher_id}
+                            subjectId={cluster.subject_id}
+                            teachers={teachers}
+                            onSave={async (tid, needsAssign) => {
+                              if (needsAssign && tid != null) {
+                                const teacher = teachers.find((t) => t.id === tid);
+                                if (teacher) {
+                                  await updateTeacher(tid, { subject_ids: [...teacher.subject_ids, cluster.subject_id] });
+                                  qc.invalidateQueries({ queryKey: ["teachers", schoolId] });
+                                }
+                              }
+                              updateTrackMut.mutate({ id: track.id, payload: { teacher_id: tid } });
+                            }}
+                            onCancel={() => setEditingTrackTeacher(null)}
+                          />
+                        );
+                      }
+                      const tName = track.teacher_id ? teacherMap[track.teacher_id]?.name : null;
+                      return (
+                        <span
+                          key={track.id}
+                          className="cursor-pointer hover:text-primary transition-colors text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingTrackTeacher({ trackId: track.id });
+                          }}
+                          title={`${track.name} — לחץ להחלפת מורה`}
+                        >
+                          {tName ?? "לא הוקצה"}
+                        </span>
+                      );
+                    })}
+                  </div>
                 );
               }
               if (editingCell?.id === r.id && editingCell.field === "teacher_id") {
                 return (
-                  <InlineSelect
-                    value={r.teacher_id ?? ""}
-                    options={[
-                      { value: "", label: "לא הוקצה" },
-                      ...teachers.map((t) => ({ value: t.id, label: t.name })),
-                    ]}
-                    onSave={(val) =>
-                      updateMut.mutate({
-                        id: r.id,
-                        payload: { teacher_id: val ? Number(val) : null },
-                      })
-                    }
+                  <TeacherSelect
+                    value={r.teacher_id}
+                    subjectId={r.subject_id}
+                    teachers={teachers}
+                    onSave={async (tid, needsAssign) => {
+                      if (needsAssign && tid != null) {
+                        const teacher = teachers.find((t) => t.id === tid);
+                        if (teacher) {
+                          await updateTeacher(tid, { subject_ids: [...teacher.subject_ids, r.subject_id] });
+                          qc.invalidateQueries({ queryKey: ["teachers", schoolId] });
+                        }
+                      }
+                      updateMut.mutate({ id: r.id, payload: { teacher_id: tid } });
+                    }}
                     onCancel={() => setEditingCell(null)}
                   />
                 );
@@ -584,6 +748,41 @@ export default function GalionPage() {
         <span>סה״כ דרישות: {filteredReqs.length}</span>
         <span>סה״כ שעות: {totalHours}</span>
       </div>
+
+      {/* Per-class hours breakdown */}
+      {classSummaryRows.length > 0 && (
+        <div className="mt-6">
+          <h3 className="text-lg font-bold mb-3">שעות לפי כיתה</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b text-muted-foreground text-xs">
+                  <th className="px-3 py-2 text-start">שכבה</th>
+                  <th className="px-3 py-2 text-start">כיתה</th>
+                  <th className="px-3 py-2 text-center">שעות רגילות</th>
+                  <th className="px-3 py-2 text-center">שעות הקבצות</th>
+                  <th className="px-3 py-2 text-center">שעות משותפים</th>
+                  <th className="px-3 py-2 text-center font-bold">סה״כ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {classSummaryRows.map((c) => (
+                  <tr key={c.id} className="border-b hover:bg-muted/30">
+                    <td className="px-3 py-1.5">{c.grade?.name ?? "—"}</td>
+                    <td className="px-3 py-1.5 font-medium">{c.name}</td>
+                    <td className="px-3 py-1.5 text-center">{c.hours.regular || "—"}</td>
+                    <td className="px-3 py-1.5 text-center">{c.hours.grouped || "—"}</td>
+                    <td className="px-3 py-1.5 text-center">{c.hours.shared || "—"}</td>
+                    <td className="px-3 py-1.5 text-center">
+                      <Badge variant="secondary" className="font-bold">{c.hours.total}</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -143,14 +143,21 @@ def _solve_in_thread(
                       result_message=result.message)
     except Exception as e:
         import traceback
-        traceback.print_exc()
+        tb = traceback.format_exc()
+        # Print full traceback to terminal
+        print("=" * 70)
+        print("SOLVER ERROR — Full traceback:")
+        print(tb)
+        print("=" * 70)
+        # Send full traceback to frontend
+        error_msg = f"{str(e)}\n\n--- Traceback ---\n{tb}"
         with _solve_results_lock:
             _solve_results[job_id] = SolveResponse(
-                status="ERROR", message=str(e), solve_time=0, solutions=[],
+                status="ERROR", message=error_msg, solve_time=0, solutions=[],
             )
         from app.solver.engine import _set_progress
         _set_progress(job_id, done=True, result_status="ERROR",
-                      result_message=str(e))
+                      result_message=error_msg)
     finally:
         db.close()
 
@@ -226,6 +233,80 @@ async def solve_stream(req: SolveRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/solve-async")
+async def solve_async(req: SolveRequest):
+    """Start solve in background and return job_id immediately."""
+    job_id = uuid.uuid4().hex[:12]
+
+    _init_progress(job_id)
+    with _solve_results_lock:
+        _solve_results[job_id] = None
+
+    thread = threading.Thread(
+        target=_solve_in_thread,
+        args=(job_id, req.school_id, req.max_time, req.max_solutions, req.num_workers),
+        daemon=True,
+    )
+    thread.start()
+
+    return {"job_id": job_id}
+
+
+@router.post("/solve/{job_id}/stop")
+async def stop_solve(job_id: str):
+    """Request the solver to stop and return the best solution found so far."""
+    from app.solver.engine import _set_progress
+    progress = get_progress(job_id)
+    if progress is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    _set_progress(job_id, stop_requested=True)
+    return {"status": "stop_requested", "job_id": job_id}
+
+
+@router.get("/solve/{job_id}/progress")
+async def get_solve_progress(job_id: str):
+    """Poll progress for a running solve job."""
+    progress = get_progress(job_id)
+    if progress is None:
+        # Check if result exists (job finished and progress was cleared)
+        with _solve_results_lock:
+            result = _solve_results.get(job_id)
+        if result:
+            return {
+                "step": "done",
+                "step_label": "הושלם",
+                "step_number": 9,
+                "total_steps": 9,
+                "percent": 100,
+                "solutions_found": len(result.solutions),
+                "elapsed": result.solve_time,
+                "done": True,
+                "result": result.model_dump(),
+            }
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    data = {
+        "step": progress.step,
+        "step_label": _STEP_LABELS.get(progress.step, progress.step),
+        "step_number": progress.step_number,
+        "total_steps": progress.total_steps,
+        "percent": progress.percent,
+        "solutions_found": progress.solutions_found,
+        "elapsed": progress.elapsed,
+        "first_solution_time": progress.first_solution_time,
+        "done": progress.done,
+    }
+
+    if progress.done:
+        with _solve_results_lock:
+            result = _solve_results.pop(job_id, None)
+        _clear_progress(job_id)
+        if result:
+            data["result"] = result.model_dump()
+
+    return data
 
 
 @router.get("/solutions", response_model=list[SolutionRead])
@@ -370,6 +451,175 @@ def get_meetings_by_teacher(
         .order_by(ScheduledMeeting.day, ScheduledMeeting.period)
         .all()
     )
+
+
+@router.get("/solutions/{solution_id}/plenary-attendance")
+def get_plenary_attendance(solution_id: int, db: Session = Depends(get_db)):
+    """Get plenary attendance info: which preferred teachers attend and which don't."""
+    from app.models.meeting import MeetingType
+
+    solution = db.get(Solution, solution_id)
+    if not solution:
+        raise HTTPException(status_code=404, detail="פתרון לא נמצא")
+
+    # Find plenary meetings
+    plenary_meetings = (
+        db.query(Meeting)
+        .filter(
+            Meeting.school_id == solution.school_id,
+            Meeting.meeting_type == MeetingType.PLENARY.value,
+            Meeting.is_active == True,
+        )
+        .all()
+    )
+
+    if not plenary_meetings:
+        return []
+
+    # Get scheduled meeting slots for this solution
+    scheduled = (
+        db.query(ScheduledMeeting)
+        .filter(ScheduledMeeting.solution_id == solution_id)
+        .all()
+    )
+
+    # Get all scheduled lessons for this solution
+    lessons = (
+        db.query(ScheduledLesson)
+        .filter(ScheduledLesson.solution_id == solution_id)
+        .all()
+    )
+
+    # Build teacher-day mapping: which days does each teacher teach?
+    teacher_days: dict[int, set[str]] = {}
+    for lesson in lessons:
+        teacher_days.setdefault(lesson.teacher_id, set()).add(lesson.day)
+
+    result = []
+    for plenary in plenary_meetings:
+        locked_ids = set(plenary.locked_teacher_ids or [])
+        teacher_ids = {t.id for t in plenary.teachers}
+
+        # Find plenary scheduled day(s)
+        plenary_days: set[str] = set()
+        for sm in scheduled:
+            if sm.meeting_id == plenary.id:
+                plenary_days.add(sm.day)
+
+        # Determine attendance per preferred (non-locked) teacher
+        preferred_attending = []
+        preferred_absent = []
+
+        for teacher in plenary.teachers:
+            if teacher.id in locked_ids:
+                continue  # Skip mandatory — they always attend
+
+            teacher_teach_days = teacher_days.get(teacher.id, set())
+            attends = bool(plenary_days & teacher_teach_days)
+            teacher_info = {"id": teacher.id, "name": teacher.name}
+            if attends:
+                preferred_attending.append(teacher_info)
+            else:
+                preferred_absent.append(teacher_info)
+
+        # Mandatory teachers
+        mandatory_teachers = [
+            {"id": t.id, "name": t.name}
+            for t in plenary.teachers
+            if t.id in locked_ids
+        ]
+
+        # ── Trade-off analysis ──
+        # For each locked teacher who isn't management/principal/coordinator/counselor:
+        # What if they were unlocked? Would more preferred teachers attend?
+        DAY_LABELS_HE = {
+            "SUNDAY": "ראשון", "MONDAY": "שני", "TUESDAY": "שלישי",
+            "WEDNESDAY": "רביעי", "THURSDAY": "חמישי", "FRIDAY": "שישי",
+        }
+        tradeoffs = []
+        # Get exempt roles (management etc.)
+        exempt_teacher_ids: set[int] = set()
+        for t in plenary.teachers:
+            if t.id in locked_ids and (
+                getattr(t, "is_management", False)
+                or getattr(t, "is_principal", False)
+                or getattr(t, "is_director", False)
+                or getattr(t, "is_pedagogical_coordinator", False)
+                or getattr(t, "is_counselor", False)
+                or getattr(t, "is_coordinator", False)
+                or getattr(t, "homeroom_class_id", None) is not None
+            ):
+                exempt_teacher_ids.add(t.id)
+
+        # Non-exempt locked teachers (candidates for unlocking)
+        candidate_locked = [
+            t for t in plenary.teachers
+            if t.id in locked_ids and t.id not in exempt_teacher_ids
+        ]
+
+        absent_set = {t["id"] for t in preferred_absent}
+
+        for candidate in candidate_locked:
+            # Remaining locked teachers if this one is unlocked
+            remaining_locked_ids = locked_ids - {candidate.id}
+            if not remaining_locked_ids:
+                continue
+
+            # Find days when ALL remaining locked teachers teach
+            possible_days: set[str] | None = None
+            for lid in remaining_locked_ids:
+                t_days = teacher_days.get(lid, set())
+                if not t_days:
+                    continue  # Non-teaching staff — doesn't constrain
+                if possible_days is None:
+                    possible_days = set(t_days)
+                else:
+                    possible_days &= t_days
+
+            if possible_days is None or not possible_days:
+                continue
+
+            # On those possible days, which currently-absent preferred teachers could attend?
+            gained = []
+            best_day = None
+            best_count = 0
+            for day in sorted(possible_days):
+                if day in plenary_days:
+                    continue  # Same as current — no change
+                day_gains = []
+                for t_info in preferred_absent:
+                    if day in teacher_days.get(t_info["id"], set()):
+                        day_gains.append(t_info)
+                if len(day_gains) > best_count:
+                    best_count = len(day_gains)
+                    best_day = day
+                    gained = day_gains
+
+            if best_count > 0 and best_day:
+                tradeoffs.append({
+                    "locked_teacher": {"id": candidate.id, "name": candidate.name},
+                    "potential_day": best_day,
+                    "potential_day_label": DAY_LABELS_HE.get(best_day, best_day),
+                    "gained_teachers": gained,
+                    "gained_count": best_count,
+                })
+
+        # Sort by most gained teachers
+        tradeoffs.sort(key=lambda x: -x["gained_count"])
+
+        result.append({
+            "meeting_id": plenary.id,
+            "meeting_name": plenary.name,
+            "plenary_days": sorted(plenary_days),
+            "mandatory_teachers": mandatory_teachers,
+            "preferred_attending": preferred_attending,
+            "preferred_absent": preferred_absent,
+            "total_teachers": len(teacher_ids),
+            "attending_count": len(mandatory_teachers) + len(preferred_attending),
+            "tradeoffs": tradeoffs,
+        })
+
+    return result
 
 
 @router.get(
@@ -583,6 +833,7 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
     or multiple requirements where pinned_slots collide).
     Returns both unresolved conflicts AND approved overlaps."""
     data = load_solver_data(db, req.school_id)
+    from app.solver.model_builder import _normalize_pair
 
     # Build teacher -> list of assigned items + hours
     teacher_items: dict[int, list[OverlapItem]] = {}
@@ -644,9 +895,13 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
 
     # ── Check 1: teacher assigned to multiple tracks in same synced cluster ──
     for cluster in data.clusters:
+        # Skip shared lessons — teacher teaching multiple tracks is expected
+        if cluster.cluster_type == "SHARED_LESSON":
+            continue
+
         teacher_tracks: dict[int, list] = {}
         for track in cluster.tracks:
-            if track.teacher_id is not None:
+            if track.teacher_id is not None and not track.allow_overlap:
                 teacher_tracks.setdefault(track.teacher_id, []).append(track)
 
         for tid, tks in teacher_tracks.items():
@@ -691,7 +946,6 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
 
     # ── Check 2: pinned-slot collisions (req vs track, req vs req, etc.) ──
     # Build teacher -> [(day, period, item_type, item_id, source_label)]
-    from app.solver.model_builder import _normalize_pair
     teacher_pinned: dict[int, list[tuple[str, int, str, int, str]]] = {}
 
     for r in data.requirements:
@@ -711,25 +965,36 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
                 )
 
     # Collect pinned tracks (synced clusters inherit pins)
-    cluster_pinned_slots: dict[int, list[tuple[str, int]]] = {}
+    # Deduplicate: collect UNIQUE slots per cluster
+    cluster_pinned_slots: dict[int, set[tuple[str, int]]] = {}
     for cluster in data.clusters:
+        slots_set: set[tuple[str, int]] = set()
         for track in cluster.tracks:
             pinned = getattr(track, "pinned_slots", None)
             if pinned:
                 for slot in pinned:
                     day, period = slot.get("day"), slot.get("period")
                     if day and period:
-                        cluster_pinned_slots.setdefault(cluster.id, []).append((day, period))
+                        slots_set.add((day, period))
+        if slots_set:
+            cluster_pinned_slots[cluster.id] = slots_set
 
+    # For each cluster, register each teacher ONCE per slot
     for cluster in data.clusters:
-        inherited = cluster_pinned_slots.get(cluster.id, [])
+        inherited = cluster_pinned_slots.get(cluster.id, set())
         if not inherited:
             continue
+        # Track which teacher+slot combos we've already added
+        seen: set[tuple[int, str, int]] = set()
         for track in cluster.tracks:
             if track.teacher_id is None or getattr(track, "is_secondary", False):
                 continue
             label = f"רצועה '{track.name}' ({cluster.name}, {track.hours_per_week}ש)"
             for day, period in inherited:
+                key = (track.teacher_id, day, period)
+                if key in seen:
+                    continue
+                seen.add(key)
                 teacher_pinned.setdefault(track.teacher_id, []).append(
                     (day, period, "track", track.id, label)
                 )

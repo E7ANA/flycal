@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models.class_group import ClassGroup, ClusterType, Grade, GroupingCluster, Track
+from app.models.class_group import ClassGroup, ClusterType, Grade, GroupingCluster, Track, cluster_source_classes
 from app.models.subject import Subject, SubjectRequirement
 from app.models.teacher import Teacher
 from app.models.timeslot import TimeSlot
@@ -20,6 +20,25 @@ from app.schemas.grouping import (
 )
 
 router = APIRouter(prefix="/api/grouping-clusters", tags=["grouping-clusters"], dependencies=[Depends(get_current_user)])
+
+
+def _delete_cluster_if_empty(db: Session, cluster: GroupingCluster | None) -> bool:
+    """Delete cluster if it has no remaining tracks. Returns True if deleted."""
+    if not cluster:
+        return False
+    remaining = db.query(Track).filter(Track.cluster_id == cluster.id).count()
+    if remaining == 0:
+        # Also unlink any remaining grouped requirements
+        db.query(SubjectRequirement).filter(
+            SubjectRequirement.grouping_cluster_id == cluster.id
+        ).update({"is_grouped": False, "grouping_cluster_id": None}, synchronize_session=False)
+        # Remove source class links
+        db.execute(cluster_source_classes.delete().where(
+            cluster_source_classes.c.cluster_id == cluster.id
+        ))
+        db.delete(cluster)
+        return True
+    return False
 
 
 def _cluster_to_read(cluster: GroupingCluster) -> GroupingClusterRead:
@@ -301,24 +320,45 @@ def convert_track_to_requirement(
             if track.teacher_id:
                 req.teacher_id = track.teacher_id
         db.delete(track)
+        # Auto-delete empty cluster
+        _delete_cluster_if_empty(db, cluster)
         db.commit()
         return {"detail": "רמה הוחזרה לדרישה עצמאית", "requirement_id": req.id if req else None}
 
-    # Track was manually created — need a target class to create a new requirement
-    if not data.class_group_id:
+    # Track without requirement_id — ungroup matching requirements and create new if needed
+    # First, find grouped requirements in this cluster for this teacher
+    matching_reqs = db.query(SubjectRequirement).filter(
+        SubjectRequirement.grouping_cluster_id == cluster.id if cluster else False,
+        SubjectRequirement.teacher_id == track.teacher_id,
+        SubjectRequirement.is_grouped == True,
+    ).all()
+
+    if matching_reqs:
+        # Ungroup all matching requirements
+        for req in matching_reqs:
+            req.is_grouped = False
+            req.grouping_cluster_id = None
+        db.delete(track)
+        _delete_cluster_if_empty(db, cluster)
+        db.commit()
+        return {"detail": "רמה הוחזרה לדרישה עצמאית", "requirement_id": matching_reqs[0].id}
+
+    # No matching requirements found — need a target class to create a new one
+    target_class_id = data.class_group_id or (track.source_class_id if track.source_class_id else None)
+    if not target_class_id:
         raise HTTPException(
             status_code=400,
             detail="יש לבחור כיתה ליצירת הדרישה",
         )
 
-    class_group = db.get(ClassGroup, data.class_group_id)
+    class_group = db.get(ClassGroup, target_class_id)
     if not class_group:
         raise HTTPException(status_code=400, detail="כיתה לא נמצאה")
 
     subject_id = cluster.subject_id if cluster else 0
     new_req = SubjectRequirement(
         school_id=class_group.school_id,
-        class_group_id=data.class_group_id,
+        class_group_id=target_class_id,
         subject_id=subject_id,
         teacher_id=track.teacher_id,
         hours_per_week=track.hours_per_week,
@@ -327,6 +367,7 @@ def convert_track_to_requirement(
     )
     db.add(new_req)
     db.delete(track)
+    _delete_cluster_if_empty(db, cluster)
     db.commit()
     db.refresh(new_req)
     return {"detail": "רמה הומרה לדרישה עצמאית", "requirement_id": new_req.id}
@@ -370,6 +411,15 @@ def update_track(track_id: int, data: TrackUpdate, db: Session = Depends(get_db)
             if blocked_slots_raw
             else None
         )
+    # Sync pinned_slots to all sibling tracks in the same cluster
+    if "pinned_slots" in data.model_dump(exclude_unset=True):
+        siblings = db.query(Track).filter(
+            Track.cluster_id == track.cluster_id,
+            Track.id != track.id,
+        ).all()
+        for sibling in siblings:
+            sibling.pinned_slots = track.pinned_slots
+
     # Sync back to linked requirement
     if track.requirement_id:
         req = db.get(SubjectRequirement, track.requirement_id)

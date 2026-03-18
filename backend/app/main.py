@@ -10,7 +10,9 @@ from app.api.auth import users_router
 from app.api.classes import router as classes_router
 from app.api.constraints import router as constraints_router
 from app.api.export import router as export_router
+from app.api.export_shahaf import router as export_shahaf_router
 from app.api.imports import router as imports_router
+from app.api.import_shahaf import router as import_shahaf_router
 from app.api.meetings import router as meetings_router
 from app.api.scenarios import router as scenarios_router
 from app.api.solver import router as solver_router
@@ -62,7 +64,9 @@ app.include_router(constraints_router)
 app.include_router(solver_router)
 app.include_router(scenarios_router)
 app.include_router(export_router)
+app.include_router(export_shahaf_router)
 app.include_router(imports_router)
+app.include_router(import_shahaf_router)
 app.include_router(meetings_router)
 
 

@@ -18,6 +18,7 @@ import GalionPage from "@/pages/GalionPage";
 import ConstraintSheetPage from "@/pages/ConstraintSheetPage";
 import BrainPage from "@/pages/BrainPage";
 import AdminPage from "@/pages/AdminPage";
+import ImportShahafPage from "@/pages/ImportShahafPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -70,6 +71,7 @@ function App() {
               <Route path="/constraint-sheet" element={<ConstraintSheetPage />} />
               <Route path="/timeslots" element={<TimeSlotsPage />} />
               <Route path="/brain" element={<BrainPage />} />
+              <Route path="/import-shahaf" element={<ImportShahafPage />} />
               <Route path="/solver" element={<SuperAdminRoute><SolverPage /></SuperAdminRoute>} />
               <Route path="/results" element={<SuperAdminRoute><ResultsPage /></SuperAdminRoute>} />
               <Route path="/scenarios" element={<SuperAdminRoute><ScenariosPage /></SuperAdminRoute>} />

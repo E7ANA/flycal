@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, ChevronDown, ChevronLeft, Undo2, X } from "lucide-react";
+import { Plus, Pencil, Trash2, ChevronDown, ChevronLeft, Undo2, X, Eye, EyeOff, Lock, LockOpen } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import {
@@ -111,8 +111,9 @@ function RequirementFormDialog({
   const classLocked = !!requirement || !!fixedClassGroupId;
 
   const createMut = useMutation({
-    mutationFn: () =>
-      createRequirement({
+    mutationFn: async () => {
+      await autoAssignIfNeeded();
+      return createRequirement({
         school_id: schoolId,
         class_group_id: classGroupId,
         subject_id: subjectId,
@@ -124,7 +125,8 @@ function RequirementFormDialog({
         pinned_slots: pinnedSlots.length > 0 ? pinnedSlots : null,
         blocked_slots: blockedSlots.length > 0 ? blockedSlots : null,
         co_teacher_ids: coTeacherIds.length > 0 ? coTeacherIds : null,
-      }),
+      });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["requirements", schoolId] });
       toast.success("דרישה נוספה");
@@ -134,15 +136,17 @@ function RequirementFormDialog({
   });
 
   const updateMut = useMutation({
-    mutationFn: () =>
-      updateRequirement(requirement!.id, {
+    mutationFn: async () => {
+      await autoAssignIfNeeded();
+      return updateRequirement(requirement!.id, {
         teacher_id: teacherId === "" ? null : teacherId,
         hours_per_week: hours,
         is_external: isExternal,
         pinned_slots: pinnedSlots.length > 0 ? pinnedSlots : null,
         blocked_slots: blockedSlots.length > 0 ? blockedSlots : null,
         co_teacher_ids: coTeacherIds.length > 0 ? coTeacherIds : null,
-      }),
+      });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["requirements", schoolId] });
       toast.success("דרישה עודכנה");
@@ -153,15 +157,23 @@ function RequirementFormDialog({
 
   const loading = createMut.isPending || updateMut.isPending;
 
-  // Filter teachers by selected subject
-  const eligibleTeachers = teachers.filter((t) =>
-    t.subject_ids.includes(subjectId),
-  );
-  // Ensure the currently assigned teacher appears in dropdown
-  if (teacherId && !eligibleTeachers.some((t) => t.id === teacherId)) {
-    const current = teachers.find((t) => t.id === teacherId);
-    if (current) eligibleTeachers.unshift(current);
-  }
+  // Filter teachers by selected subject — split into assigned and unassigned
+  const cmpTeacher = (a: Teacher, b: Teacher) => a.name.localeCompare(b.name, "he");
+  const assignedTeachers = teachers.filter((t) => t.subject_ids.includes(subjectId)).sort(cmpTeacher);
+  const unassignedTeachers = teachers.filter((t) => !t.subject_ids.includes(subjectId)).sort(cmpTeacher);
+
+  // Auto-assign teacher to subject if needed
+  const autoAssignIfNeeded = async () => {
+    const tid = teacherId === "" ? null : teacherId;
+    if (tid && unassignedTeachers.some((t) => t.id === tid)) {
+      const { updateTeacher } = await import("@/api/teachers");
+      const teacher = teachers.find((t) => t.id === tid);
+      if (teacher) {
+        await updateTeacher(tid, { subject_ids: [...teacher.subject_ids, subjectId] });
+        qc.invalidateQueries({ queryKey: ["teachers", schoolId] });
+      }
+    }
+  };
 
   return (
     <Dialog open={open} onClose={onClose}>
@@ -224,13 +236,19 @@ function RequirementFormDialog({
             }
           >
             <option value="">לא הוקצה</option>
-            {eligibleTeachers.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-            {eligibleTeachers.length === 0 && subjectId > 0 && (
-              <option disabled>אין מורים למקצוע זה</option>
+            {assignedTeachers.length > 0 && (
+              <optgroup label="מורים של המקצוע">
+                {assignedTeachers.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </optgroup>
+            )}
+            {unassignedTeachers.length > 0 && (
+              <optgroup label="מורים אחרים (ישויכו למקצוע)">
+                {unassignedTeachers.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </optgroup>
             )}
           </Select>
         </div>
@@ -556,24 +574,33 @@ function TrackFormDialog({
     track?.blocked_slots ?? [],
   );
 
-  const eligibleTeachers = teachers.filter((t) =>
-    t.subject_ids.includes(subjectId),
-  );
-  // Ensure the currently assigned teacher appears in dropdown
-  if (teacherId && !eligibleTeachers.some((t) => t.id === teacherId)) {
-    const current = teachers.find((t) => t.id === teacherId);
-    if (current) eligibleTeachers.unshift(current);
-  }
+  const cmpT = (a: Teacher, b: Teacher) => a.name.localeCompare(b.name, "he");
+  const assignedTeachers = teachers.filter((t) => t.subject_ids.includes(subjectId)).sort(cmpT);
+  const unassignedTeachers = teachers.filter((t) => !t.subject_ids.includes(subjectId)).sort(cmpT);
+
+  const autoAssignIfNeeded = async () => {
+    const tid = teacherId === "" ? null : teacherId;
+    if (tid && unassignedTeachers.some((t) => t.id === tid)) {
+      const { updateTeacher } = await import("@/api/teachers");
+      const teacher = teachers.find((t) => t.id === tid);
+      if (teacher) {
+        await updateTeacher(Number(tid), { subject_ids: [...teacher.subject_ids, subjectId] });
+        qc.invalidateQueries({ queryKey: ["teachers", schoolId] });
+      }
+    }
+  };
 
   const createMut = useMutation({
-    mutationFn: () =>
-      createTrack({
+    mutationFn: async () => {
+      await autoAssignIfNeeded();
+      return createTrack({
         name,
         cluster_id: clusterId,
         teacher_id: teacherId === "" ? null : teacherId,
         hours_per_week: hours,
         is_secondary: isSecondary,
-      }),
+      });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tracks"] });
       qc.invalidateQueries({ queryKey: ["groupingClusters", schoolId] });
@@ -584,8 +611,9 @@ function TrackFormDialog({
   });
 
   const updateMut = useMutation({
-    mutationFn: () =>
-      updateTrack(track!.id, {
+    mutationFn: async () => {
+      await autoAssignIfNeeded();
+      return updateTrack(track!.id, {
         name,
         teacher_id: teacherId === "" ? null : teacherId,
         hours_per_week: hours,
@@ -594,7 +622,8 @@ function TrackFormDialog({
         source_class_id: sourceClassId === "" ? null : sourceClassId,
         pinned_slots: pinnedSlots.length > 0 ? pinnedSlots : null,
         blocked_slots: blockedSlots.length > 0 ? blockedSlots : null,
-      }),
+      });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tracks"] });
       toast.success("רמה עודכנה");
@@ -639,13 +668,19 @@ function TrackFormDialog({
             }
           >
             <option value="">לא הוקצה</option>
-            {eligibleTeachers.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-            {eligibleTeachers.length === 0 && (
-              <option disabled>אין מורים למקצוע זה</option>
+            {assignedTeachers.length > 0 && (
+              <optgroup label="מורים של המקצוע">
+                {assignedTeachers.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </optgroup>
+            )}
+            {unassignedTeachers.length > 0 && (
+              <optgroup label="מורים אחרים (ישויכו למקצוע)">
+                {unassignedTeachers.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </optgroup>
             )}
           </Select>
         </div>
@@ -941,13 +976,22 @@ function SharedLessonFormDialog({
   const [hours, setHours] = useState(1);
   const [selectedClassIds, setSelectedClassIds] = useState<number[]>([]);
 
-  const eligibleTeachers = teachers.filter((t) =>
-    t.subject_ids.includes(subjectId),
-  );
+  const cmpT = (a: Teacher, b: Teacher) => a.name.localeCompare(b.name, "he");
+  const assignedTeachers = teachers.filter((t) => t.subject_ids.includes(subjectId)).sort(cmpT);
+  const unassignedTeachers = teachers.filter((t) => !t.subject_ids.includes(subjectId)).sort(cmpT);
 
   const saveMut = useMutation({
-    mutationFn: () =>
-      createGroupingCluster({
+    mutationFn: async () => {
+      // Auto-assign teacher to subject if needed
+      if (teacherId !== "" && unassignedTeachers.some((t) => t.id === teacherId)) {
+        const { updateTeacher } = await import("@/api/teachers");
+        const teacher = teachers.find((t) => t.id === teacherId);
+        if (teacher) {
+          await updateTeacher(Number(teacherId), { subject_ids: [...teacher.subject_ids, subjectId] });
+          qc.invalidateQueries({ queryKey: ["teachers", schoolId] });
+        }
+      }
+      return createGroupingCluster({
         school_id: schoolId,
         name,
         subject_id: subjectId,
@@ -955,7 +999,8 @@ function SharedLessonFormDialog({
         teacher_id: teacherId === "" ? null : teacherId,
         hours_per_week: hours,
         source_class_ids: selectedClassIds,
-      }),
+      });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["groupingClusters", schoolId] });
       qc.invalidateQueries({ queryKey: ["tracks"] });
@@ -1017,11 +1062,20 @@ function SharedLessonFormDialog({
             required
           >
             <option value="">בחר מורה</option>
-            {eligibleTeachers.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
+            {assignedTeachers.length > 0 && (
+              <optgroup label="מורים של המקצוע">
+                {assignedTeachers.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </optgroup>
+            )}
+            {unassignedTeachers.length > 0 && (
+              <optgroup label="מורים אחרים (ישויכו למקצוע)">
+                {unassignedTeachers.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </optgroup>
+            )}
           </Select>
         </div>
         <div>
@@ -1224,6 +1278,10 @@ function SubjectFormDialog({
   const [blockedSlots, setBlockedSlots] = useState<BlockedSlot[]>(subject?.blocked_slots ?? []);
   const [blockDay, setBlockDay] = useState("");
   const [blockPeriod, setBlockPeriod] = useState("");
+  const [linkGroup, setLinkGroup] = useState(subject?.link_group ?? "");
+  const [linkGroupMaxPerDay, setLinkGroupMaxPerDay] = useState<string>(
+    subject?.link_group_max_per_day != null ? String(subject.link_group_max_per_day) : "",
+  );
 
   const addBlockedSlot = () => {
     if (!blockDay || !blockPeriod) return;
@@ -1248,6 +1306,8 @@ function SubjectFormDialog({
         always_double: alwaysDouble,
         blocked_slots: blockedSlots.length > 0 ? blockedSlots : null,
         limit_last_periods: limitLastPeriods,
+        link_group: linkGroup || null,
+        link_group_max_per_day: linkGroupMaxPerDay !== "" ? Number(linkGroupMaxPerDay) : null,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
@@ -1267,6 +1327,8 @@ function SubjectFormDialog({
         always_double: alwaysDouble,
         blocked_slots: blockedSlots.length > 0 ? blockedSlots : null,
         limit_last_periods: limitLastPeriods,
+        link_group: linkGroup || null,
+        link_group_max_per_day: linkGroupMaxPerDay !== "" ? Number(linkGroupMaxPerDay) : null,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
@@ -1308,6 +1370,17 @@ function SubjectFormDialog({
         <div className="flex items-center gap-3">
           <input id="subj-limit-last" type="checkbox" checked={limitLastPeriods} onChange={(e) => setLimitLastPeriods(e.target.checked)} className="h-4 w-4 accent-primary cursor-pointer" />
           <Label htmlFor="subj-limit-last" className="cursor-pointer">הגבלה בשעות אחרונות</Label>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor="subj-link-group">קבוצת מקצועות מקושרים</Label>
+            <Input id="subj-link-group" value={linkGroup} onChange={(e) => setLinkGroup(e.target.value)} placeholder='לדוגמה: תנ"ך' />
+            <p className="text-xs text-muted-foreground mt-1">מקצועות עם אותה קבוצה נחשבים כאחד לחלוקה יומית</p>
+          </div>
+          <div>
+            <Label htmlFor="subj-link-max">מקס׳ שעות ליום (קבוצה)</Label>
+            <Input id="subj-link-max" type="number" min={1} max={6} value={linkGroupMaxPerDay} onChange={(e) => setLinkGroupMaxPerDay(e.target.value)} placeholder="2" />
+          </div>
         </div>
         <div>
           <Label htmlFor="subj-double-priority">עדיפות שיעורים כפולים (0–100)</Label>
@@ -1394,6 +1467,8 @@ export default function GroupingsPage() {
   const [reqFixedClassId, setReqFixedClassId] = useState<number | undefined>();
   const [expandedClassId, setExpandedClassId] = useState<number | null>(null);
   const [selectedItem, setSelectedItem] = useState<{ type: "class"; id: number } | { type: "cluster"; id: number } | null>(null);
+  const [editingCell, setEditingCell] = useState<{ reqId: number; field: "hours" | "teacher" | "class" } | null>(null);
+  const [editingClusterTrackTeacher, setEditingClusterTrackTeacher] = useState<number | null>(null);
 
   const { data: clusters = [] } = useQuery({
     queryKey: ["groupingClusters", schoolId],
@@ -1413,9 +1488,17 @@ export default function GroupingsPage() {
     enabled: !!schoolId,
   });
 
+  // All requirements (including grouped) — for hours calculation in subjects table
+  const { data: allRequirements = [] } = useQuery({
+    queryKey: ["requirements", schoolId, "all"],
+    queryFn: () => fetchRequirements(schoolId!, true),
+    enabled: !!schoolId,
+  });
+
+  // Standalone only (excluding grouped) — for requirements tab
   const { data: requirements = [] } = useQuery({
-    queryKey: ["requirements", schoolId],
-    queryFn: () => fetchRequirements(schoolId!),
+    queryKey: ["requirements", schoolId, "standalone"],
+    queryFn: () => fetchRequirements(schoolId!, false),
     enabled: !!schoolId,
   });
 
@@ -1445,6 +1528,14 @@ export default function GroupingsPage() {
       setDeleteSubjectTarget(null);
     },
     onError: () => toast.error("שגיאה במחיקת מקצוע"),
+  });
+
+  const toggleDoubleMut = useMutation({
+    mutationFn: ({ id, value }: { id: number; value: boolean }) =>
+      updateSubject(id, { always_double: value }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
+    },
   });
 
   const deleteClusterOrTrackMut = useMutation({
@@ -1487,13 +1578,57 @@ export default function GroupingsPage() {
     onError: () => toast.error("שגיאה בהמרה לדרישה"),
   });
 
+  // Requirement → Cluster (link to grouping)
+  const [linkReqId, setLinkReqId] = useState<number | null>(null);
+  const [linkReqSubjectId, setLinkReqSubjectId] = useState<number | null>(null);
+  const [linkReqClassId, setLinkReqClassId] = useState<number | null>(null);
+  const [linkTargetReqId, setLinkTargetReqId] = useState<number | "">("" );
+
+  const linkToClusterMut = useMutation({
+    mutationFn: async (params: { reqId: number; partnerReqId: number }) => {
+      // Create a new cluster, then add both requirements as tracks
+      const req1 = allRequirements.find((r) => r.id === params.reqId);
+      const req2 = allRequirements.find((r) => r.id === params.partnerReqId);
+      if (!req1 || !req2) throw new Error("דרישות לא נמצאו");
+      const subj = subjectMap[req1.subject_id];
+      const cls1 = classes.find((c) => c.id === req1.class_group_id);
+      const cls2 = classes.find((c) => c.id === req2.class_group_id);
+      // Determine grade
+      const gradeId = cls1?.grade_id ?? cls2?.grade_id ?? null;
+      const cluster = await createGroupingCluster({
+        school_id: schoolId!,
+        name: `הקבצת ${subj?.name ?? "מקצוע"}`,
+        subject_id: req1.subject_id,
+        grade_id: gradeId,
+        source_class_ids: [req1.class_group_id, req2.class_group_id],
+      });
+      // Add both requirements as tracks
+      await createTrackFromRequirement({ cluster_id: cluster.id, requirement_id: params.reqId });
+      await createTrackFromRequirement({ cluster_id: cluster.id, requirement_id: params.partnerReqId });
+      return cluster;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tracks"] });
+      qc.invalidateQueries({ queryKey: ["requirements", schoolId] });
+      qc.invalidateQueries({ queryKey: ["groupingClusters", schoolId] });
+      toast.success("נוצרה הקבצה חדשה");
+      setLinkReqId(null);
+      setLinkTargetReqId("");
+    },
+    onError: () => toast.error("שגיאה ביצירת הקבצה"),
+  });
+
   const handleToRequirement = (track: Track) => {
     if (track.requirement_id) {
       // Track was imported from a requirement — direct conversion, no class needed
       toRequirementMut.mutate({ trackId: track.id });
+    } else if (track.source_class_id) {
+      // Has source class — use it directly
+      toRequirementMut.mutate({ trackId: track.id, classGroupId: track.source_class_id });
     } else {
       // Need to pick a class
       setToReqTrack(track);
+      setToReqClassId("");
     }
   };
 
@@ -1567,6 +1702,22 @@ export default function GroupingsPage() {
 
   const sortedGrades = [...grades].sort((a, b) => a.level - b.level);
 
+  // Build per-subject hours by grade for subject table (uses ALL requirements)
+  const classToGrade: Record<number, number> = {};
+  for (const c of classes) classToGrade[c.id] = c.grade_id;
+  const subjectGradeHours: Record<number, Record<number, number>> = {};
+  const subjectTotalHours: Record<number, number> = {};
+  for (const r of allRequirements) {
+    if (!subjectGradeHours[r.subject_id]) subjectGradeHours[r.subject_id] = {};
+    if (!subjectTotalHours[r.subject_id]) subjectTotalHours[r.subject_id] = 0;
+    const gradeId = classToGrade[r.class_group_id];
+    if (gradeId != null) {
+      subjectGradeHours[r.subject_id][gradeId] =
+        (subjectGradeHours[r.subject_id][gradeId] ?? 0) + r.hours_per_week;
+    }
+    subjectTotalHours[r.subject_id] += r.hours_per_week;
+  }
+
   return (
     <div className="space-y-6">
       {/* ── Tab Bar ── */}
@@ -1598,6 +1749,8 @@ export default function GroupingsPage() {
           </div>
           <DataTable
             compact
+            searchable
+            searchPlaceholder="חיפוש מקצוע..."
             keyField="id"
             data={subjects}
             columns={[
@@ -1606,29 +1759,70 @@ export default function GroupingsPage() {
                 accessor: (s: Subject) => (
                   <div className="h-5 w-5 rounded-full" style={{ backgroundColor: s.color ?? "#ccc" }} />
                 ),
-                className: "w-16",
-              },
-              { header: "שם", accessor: "name" as keyof Subject },
-              {
-                header: "הכרח כפולים",
-                accessor: (s: Subject) => s.always_double ? "✓" : "—",
-                className: "w-24 text-center",
+                className: "w-12",
               },
               {
-                header: "דרישות / הקבצות",
+                header: "שם",
+                accessor: (s: Subject) => (
+                  <span className={s.is_hidden ? "line-through text-muted-foreground" : ""}>
+                    {s.name}
+                  </span>
+                ),
+              },
+              {
+                header: "סה״כ",
                 accessor: (s: Subject) => {
-                  const reqCount = requirements.filter((r) => r.subject_id === s.id).length;
-                  const clusterCount = clusters.filter((c) => c.subject_id === s.id).length;
-                  const parts: string[] = [];
-                  if (reqCount > 0) parts.push(`${reqCount} דרישות`);
-                  if (clusterCount > 0) parts.push(`${clusterCount} הקבצות`);
-                  return parts.length > 0 ? parts.join(", ") : "—";
+                  const total = subjectTotalHours[s.id];
+                  return total ? <span className="font-medium">{total}</span> : "—";
                 },
+                className: "w-16 text-center",
+              },
+              ...sortedGrades.map((g) => ({
+                header: g.name,
+                accessor: (s: Subject) => {
+                  const hours = subjectGradeHours[s.id]?.[g.id];
+                  return hours ? String(hours) : "";
+                },
+                className: "w-16 text-center",
+              })),
+              {
+                header: "כפולים",
+                accessor: (s: Subject) => (
+                  <button
+                    type="button"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      await updateSubject(s.id, { always_double: !s.always_double });
+                      qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
+                    }}
+                    className={`cursor-pointer hover:opacity-70 font-bold ${s.always_double ? "text-green-600" : "text-muted-foreground hover:text-green-600"}`}
+                    title={s.always_double ? "לחץ לביטול כפולים" : "לחץ להפעלת כפולים"}
+                  >
+                    {s.always_double ? "✓" : "—"}
+                  </button>
+                ),
+                className: "w-16 text-center",
               },
               {
                 header: "פעולות",
                 accessor: (s: Subject) => (
                   <div className="flex gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title={s.is_hidden ? "הצג בסולבר" : "הסתר מהסולבר"}
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        await updateSubject(s.id, { is_hidden: !s.is_hidden });
+                        qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
+                        toast.success(s.is_hidden ? "מקצוע הוצג" : "מקצוע הוסתר מהסולבר");
+                      }}
+                    >
+                      {s.is_hidden
+                        ? <EyeOff className="h-4 w-4 text-orange-400" />
+                        : <Eye className="h-4 w-4 text-muted-foreground" />
+                      }
+                    </Button>
                     <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setEditingSubject(s); setSubjectFormOpen(true); }}>
                       <Pencil className="h-4 w-4" />
                     </Button>
@@ -1637,7 +1831,7 @@ export default function GroupingsPage() {
                     </Button>
                   </div>
                 ),
-                className: "w-24",
+                className: "w-32",
               },
             ]}
             emptyMessage="אין מקצועות — הוסף מקצוע חדש"
@@ -1765,6 +1959,8 @@ export default function GroupingsPage() {
                   _isTrack: boolean;
                   _trackName?: string;
                   _reqId?: number;
+                  _isPinned: boolean;
+                  _isHidden: boolean;
                 };
                 const rows: ReqRow[] = classReqs.map((r) => ({
                   _key: `req-${r.id}`,
@@ -1777,6 +1973,8 @@ export default function GroupingsPage() {
                   grouping_cluster_id: r.grouping_cluster_id,
                   _isTrack: false,
                   _reqId: r.id,
+                  _isPinned: (r.pinned_slots ?? []).length > 0,
+                  _isHidden: r.is_hidden ?? false,
                 }));
                 const reqIds = new Set(classReqs.map((r) => r.id));
                 for (const cluster of classClusters) {
@@ -1793,6 +1991,8 @@ export default function GroupingsPage() {
                       grouping_cluster_id: cluster.id,
                       _isTrack: true,
                       _trackName: track.name,
+                      _isPinned: (track.pinned_slots ?? []).length > 0,
+                      _isHidden: false,
                     });
                   }
                 }
@@ -1809,6 +2009,11 @@ export default function GroupingsPage() {
                       compact
                       keyField="_key"
                       data={rows}
+                      rowClassName={(r: ReqRow) =>
+                        r._isHidden ? "opacity-40 line-through"
+                        : r._isPinned ? "bg-yellow-50 dark:bg-yellow-950/20"
+                        : undefined
+                      }
                       columns={[
                         {
                           header: "מקצוע",
@@ -1825,12 +2030,86 @@ export default function GroupingsPage() {
                         {
                           header: "מורה",
                           accessor: (r: ReqRow) => {
-                            const primary = r.teacher_id ? teacherMap[r.teacher_id] ?? "—" : "לא הוקצה";
                             const co = (r.co_teacher_ids ?? []).map((id: number) => teacherMap[id]).filter(Boolean);
-                            return co.length > 0 ? `${primary} + ${co.join(", ")}` : primary;
+                            if (!r._isTrack && r._reqId && editingCell?.reqId === r._reqId && editingCell.field === "teacher") {
+                              return (
+                                <select
+                                  autoFocus
+                                  className="border rounded px-1 py-0.5 text-sm bg-white dark:bg-gray-800 w-full"
+                                  value={r.teacher_id ?? ""}
+                                  onChange={async (e) => {
+                                    const val = e.target.value ? Number(e.target.value) : null;
+                                    setEditingCell(null);
+                                    await updateRequirement(r._reqId!, { teacher_id: val });
+                                    qc.invalidateQueries({ queryKey: ["requirements", schoolId] });
+                                    toast.success("מורה עודכן");
+                                  }}
+                                  onBlur={() => setEditingCell(null)}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <option value="">לא הוקצה</option>
+                                  {teachers.map((t) => (
+                                    <option key={t.id} value={t.id}>{t.name}</option>
+                                  ))}
+                                </select>
+                              );
+                            }
+                            const primary = r.teacher_id ? teacherMap[r.teacher_id] ?? "—" : "לא הוקצה";
+                            const display = co.length > 0 ? `${primary} + ${co.join(", ")}` : primary;
+                            if (r._isTrack) return display;
+                            return (
+                              <span
+                                className="cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 rounded px-1 py-0.5 -mx-1"
+                                onClick={(e) => { e.stopPropagation(); setEditingCell({ reqId: r._reqId!, field: "teacher" }); }}
+                              >
+                                {display}
+                              </span>
+                            );
                           },
                         },
-                        { header: "שעות", accessor: "hours_per_week" as keyof ReqRow },
+                        {
+                          header: "שעות",
+                          accessor: (r: ReqRow) => {
+                            if (!r._isTrack && r._reqId && editingCell?.reqId === r._reqId && editingCell.field === "hours") {
+                              return (
+                                <input
+                                  type="number"
+                                  autoFocus
+                                  min={1}
+                                  max={20}
+                                  className="border rounded px-1 py-0.5 text-sm w-16 bg-white dark:bg-gray-800"
+                                  defaultValue={r.hours_per_week}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onBlur={async (e) => {
+                                    const val = Number(e.target.value);
+                                    setEditingCell(null);
+                                    if (val > 0 && val !== r.hours_per_week) {
+                                      await updateRequirement(r._reqId!, { hours_per_week: val });
+                                      qc.invalidateQueries({ queryKey: ["requirements", schoolId] });
+                                      toast.success("שעות עודכנו");
+                                    }
+                                  }}
+                                  onKeyDown={async (e) => {
+                                    if (e.key === "Enter") {
+                                      (e.target as HTMLInputElement).blur();
+                                    } else if (e.key === "Escape") {
+                                      setEditingCell(null);
+                                    }
+                                  }}
+                                />
+                              );
+                            }
+                            if (r._isTrack) return r.hours_per_week;
+                            return (
+                              <span
+                                className="cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 rounded px-1 py-0.5 -mx-1"
+                                onClick={(e) => { e.stopPropagation(); setEditingCell({ reqId: r._reqId!, field: "hours" }); }}
+                              >
+                                {r.hours_per_week}
+                              </span>
+                            );
+                          },
+                        },
                         {
                           header: "סוג",
                           accessor: (r: ReqRow) => (
@@ -1853,6 +2132,33 @@ export default function GroupingsPage() {
                           accessor: (r: ReqRow) =>
                             r._isTrack ? null : (
                               <div className="flex gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title={r._isHidden ? "הצג בסולבר" : "הסתר מהסולבר"}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    await updateRequirement(r._reqId!, { is_hidden: !r._isHidden });
+                                    qc.invalidateQueries({ queryKey: ["requirements", schoolId] });
+                                    toast.success(r._isHidden ? "דרישה הוצגה" : "דרישה הוסתרה מהסולבר");
+                                  }}
+                                >
+                                  {r._isHidden
+                                    ? <EyeOff className="h-4 w-4 text-orange-400" />
+                                    : <Eye className="h-4 w-4 text-muted-foreground" />
+                                  }
+                                </Button>
+                                {!r.is_grouped && (
+                                  <Button variant="ghost" size="icon" title="חבר להקבצה" onClick={(e) => {
+                                    e.stopPropagation();
+                                    setLinkReqId(r._reqId!);
+                                    setLinkReqSubjectId(r.subject_id);
+                                    setLinkReqClassId(cls.id);
+                                    setLinkTargetReqId("");
+                                  }}>
+                                    <Plus className="h-4 w-4 text-blue-500" />
+                                  </Button>
+                                )}
                                 <Button variant="ghost" size="icon" onClick={(e) => {
                                   e.stopPropagation();
                                   const orig = classReqs.find((rq) => rq.id === r._reqId);
@@ -1865,11 +2171,49 @@ export default function GroupingsPage() {
                                 }}><Trash2 className="h-4 w-4 text-destructive" /></Button>
                               </div>
                             ),
-                          className: "w-24",
+                          className: "w-32",
                         },
                       ]}
                       emptyMessage="אין דרישות לכיתה זו"
                     />
+                    {/* Summary */}
+                    {(() => {
+                      const standaloneHours = rows.filter((r) => !r.is_grouped && !r._isTrack && !r._isHidden).reduce((s, r) => s + r.hours_per_week, 0);
+                      const groupedHours = rows.filter((r) => (r.is_grouped || r._isTrack) && !r._isHidden).reduce((s, r) => s + r.hours_per_week, 0);
+                      // Effective cluster hours: max track hours per cluster (synced tracks share slots)
+                      const clusterMaxHours: Record<number, number> = {};
+                      for (const r of rows) {
+                        if ((r.is_grouped || r._isTrack) && r.grouping_cluster_id && !r._isHidden) {
+                          const cur = clusterMaxHours[r.grouping_cluster_id] ?? 0;
+                          if (r.hours_per_week > cur) clusterMaxHours[r.grouping_cluster_id] = r.hours_per_week;
+                        }
+                      }
+                      // Split by cluster type
+                      let regularClusterHours = 0;
+                      let sharedClusterHours = 0;
+                      for (const [cid, hrs] of Object.entries(clusterMaxHours)) {
+                        const cl = clusters.find((c) => c.id === Number(cid));
+                        if (cl?.cluster_type === "SHARED_LESSON") {
+                          sharedClusterHours += hrs;
+                        } else {
+                          regularClusterHours += hrs;
+                        }
+                      }
+                      const effectiveTotal = standaloneHours + regularClusterHours + sharedClusterHours;
+                      const isOver = effectiveTotal > 40;
+                      return (
+                        <div className={`mt-3 p-3 rounded-md text-sm border ${isOver ? "bg-destructive/10 border-destructive/30" : "bg-muted/30 border-border"}`}>
+                          <div className="flex gap-6 flex-wrap">
+                            <span>שעות כיתה: <strong>{standaloneHours}</strong></span>
+                            <span>הקבצות: <strong>{regularClusterHours}</strong></span>
+                            {sharedClusterHours > 0 && <span>משותפים: <strong>{sharedClusterHours}</strong></span>}
+                            <span className={isOver ? "text-destructive font-bold" : "font-bold"}>
+                              סה״כ: {effectiveTotal} / 40
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })()}
@@ -1914,18 +2258,75 @@ export default function GroupingsPage() {
                       compact
                       keyField="id"
                       data={clusterTracks}
+                      rowClassName={(t: Track) =>
+                        (t.pinned_slots ?? []).length > 0 ? "bg-yellow-50 dark:bg-yellow-950/20" : undefined
+                      }
                       columns={[
                         { header: "שם רמה", accessor: "name" as keyof Track },
                         {
                           header: "מורה",
                           accessor: (t: Track) => {
-                            if (!t.teacher_id) return "לא הוקצה";
-                            const teacher = teachers.find((tc) => tc.id === t.teacher_id);
-                            if (!teacher) return "—";
+                            if (editingClusterTrackTeacher === t.id) {
+                              const subjectId = cluster.subject_id;
+                              const cmp = (a: typeof teachers[0], b: typeof teachers[0]) => a.name.localeCompare(b.name, "he");
+                              const assigned = teachers.filter((tc) => tc.subject_ids.includes(subjectId)).sort(cmp);
+                              const unassigned = teachers.filter((tc) => !tc.subject_ids.includes(subjectId)).sort(cmp);
+                              return (
+                                <div className="flex items-center gap-1">
+                                  <select
+                                    defaultValue={t.teacher_id ?? ""}
+                                    onChange={async (e) => {
+                                      const val = e.target.value ? Number(e.target.value) : null;
+                                      if (val && unassigned.some((tc) => tc.id === val)) {
+                                        const tc = teachers.find((x) => x.id === val);
+                                        if (tc) {
+                                          const { updateTeacher } = await import("@/api/teachers");
+                                          await updateTeacher(val, { subject_ids: [...tc.subject_ids, subjectId] });
+                                          qc.invalidateQueries({ queryKey: ["teachers", schoolId] });
+                                        }
+                                      }
+                                      await updateTrack(t.id, { teacher_id: val });
+                                      qc.invalidateQueries({ queryKey: ["grouping-clusters", schoolId] });
+                                      toast.success("מורה עודכן");
+                                      setEditingClusterTrackTeacher(null);
+                                    }}
+                                    className="rounded border border-input bg-background px-1 py-0.5 text-sm max-w-[200px]"
+                                    autoFocus
+                                    onBlur={() => setEditingClusterTrackTeacher(null)}
+                                  >
+                                    <option value="">לא הוקצה</option>
+                                    {assigned.length > 0 && (
+                                      <optgroup label="מורים של המקצוע">
+                                        {assigned.map((tc) => (
+                                          <option key={tc.id} value={tc.id}>{tc.name}</option>
+                                        ))}
+                                      </optgroup>
+                                    )}
+                                    {unassigned.length > 0 && (
+                                      <optgroup label="מורים אחרים (ישויכו למקצוע)">
+                                        {unassigned.map((tc) => (
+                                          <option key={tc.id} value={tc.id}>{tc.name}</option>
+                                        ))}
+                                      </optgroup>
+                                    )}
+                                  </select>
+                                  <button onClick={() => setEditingClusterTrackTeacher(null)} className="text-red-500 hover:text-red-600">
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              );
+                            }
+                            const teacher = t.teacher_id ? teachers.find((tc) => tc.id === t.teacher_id) : null;
                             return (
-                              <span className="flex items-center gap-1.5">
-                                {teacher.name}
-                                {teacher.blocked_slots && teacher.blocked_slots.length > 0 && (
+                              <span
+                                className="cursor-pointer hover:text-primary transition-colors flex items-center gap-1.5"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingClusterTrackTeacher(t.id);
+                                }}
+                              >
+                                {teacher ? teacher.name : "לא הוקצה"}
+                                {teacher?.blocked_slots && teacher.blocked_slots.length > 0 && (
                                   <Badge variant="outline" className="text-xs text-amber-600">{teacher.blocked_slots.length} חסימות</Badge>
                                 )}
                               </span>
@@ -1945,6 +2346,26 @@ export default function GroupingsPage() {
                               </span>
                             );
                           },
+                        },
+                        {
+                          header: "קבוצה",
+                          accessor: (t: Track) => {
+                            if (t.link_group == null) return "";
+                            // Find other tracks with same link_group
+                            const partners = clusterTracks.filter(
+                              (other) => other.link_group === t.link_group && other.id !== t.id,
+                            );
+                            return (
+                              <Badge variant="secondary" className="text-xs" title={
+                                partners.length > 0
+                                  ? `קבוצה ${t.link_group}: ${partners.map((p) => p.name).join(", ")}`
+                                  : `קבוצה ${t.link_group}`
+                              }>
+                                קב׳ {t.link_group}
+                              </Badge>
+                            );
+                          },
+                          className: "w-16",
                         },
                         {
                           header: "פעולות",
@@ -2090,6 +2511,9 @@ export default function GroupingsPage() {
                             compact
                             keyField="id"
                             data={clusterTracks}
+                            rowClassName={(t: Track) =>
+                              (t.pinned_slots ?? []).length > 0 ? "bg-yellow-50 dark:bg-yellow-950/20" : undefined
+                            }
                             columns={[
                               {
                                 header: "שם",
@@ -2097,14 +2521,102 @@ export default function GroupingsPage() {
                               },
                               {
                                 header: "מורה",
-                                accessor: (t) =>
-                                  t.teacher_id
-                                    ? teacherMap[t.teacher_id] ?? "—"
-                                    : "לא הוקצה",
+                                accessor: (t: Track) => {
+                                  if (editingClusterTrackTeacher === t.id) {
+                                    const subjectId = cluster.subject_id;
+                                    const cmpT = (a: Teacher, b: Teacher) => a.name.localeCompare(b.name, "he");
+                                    const assigned = teachers.filter((tc) => tc.subject_ids.includes(subjectId)).sort(cmpT);
+                                    const unassigned = teachers.filter((tc) => !tc.subject_ids.includes(subjectId)).sort(cmpT);
+                                    return (
+                                      <div className="flex items-center gap-1">
+                                        <select
+                                          defaultValue={t.teacher_id ?? ""}
+                                          onChange={async (e) => {
+                                            const val = e.target.value ? Number(e.target.value) : null;
+                                            if (val && unassigned.some((tc) => tc.id === val)) {
+                                              const { updateTeacher } = await import("@/api/teachers");
+                                              const tc = teachers.find((x) => x.id === val);
+                                              if (tc) {
+                                                await updateTeacher(val, { subject_ids: [...tc.subject_ids, subjectId] });
+                                                qc.invalidateQueries({ queryKey: ["teachers", schoolId] });
+                                              }
+                                            }
+                                            await updateTrack(t.id, { teacher_id: val });
+                                            qc.invalidateQueries({ queryKey: ["grouping-clusters", schoolId] });
+                                            toast.success("מורה עודכן");
+                                            setEditingClusterTrackTeacher(null);
+                                          }}
+                                          className="rounded border border-input bg-background px-1 py-0.5 text-sm max-w-[200px]"
+                                          autoFocus
+                                          onBlur={() => setEditingClusterTrackTeacher(null)}
+                                        >
+                                          <option value="">לא הוקצה</option>
+                                          {assigned.length > 0 && (
+                                            <optgroup label="מורים של המקצוע">
+                                              {assigned.map((tc) => (
+                                                <option key={tc.id} value={tc.id}>{tc.name}</option>
+                                              ))}
+                                            </optgroup>
+                                          )}
+                                          {unassigned.length > 0 && (
+                                            <optgroup label="מורים אחרים (ישויכו למקצוע)">
+                                              {unassigned.map((tc) => (
+                                                <option key={tc.id} value={tc.id}>{tc.name}</option>
+                                              ))}
+                                            </optgroup>
+                                          )}
+                                        </select>
+                                        <button onClick={() => setEditingClusterTrackTeacher(null)} className="text-red-500 hover:text-red-600">
+                                          <X className="h-3.5 w-3.5" />
+                                        </button>
+                                      </div>
+                                    );
+                                  }
+                                  const tName = t.teacher_id ? (teacherMap[t.teacher_id] ?? "—") : "לא הוקצה";
+                                  return (
+                                    <span
+                                      className="cursor-pointer hover:text-primary transition-colors"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setEditingClusterTrackTeacher(t.id);
+                                      }}
+                                    >
+                                      {tName}
+                                    </span>
+                                  );
+                                },
                               },
                               {
                                 header: "שעות",
                                 accessor: "hours_per_week",
+                              },
+                              {
+                                header: "נעילה",
+                                accessor: (t: Track) => {
+                                  const pinned = t.pinned_slots ?? [];
+                                  if (pinned.length === 0) return <span className="text-xs text-muted-foreground">—</span>;
+                                  return (
+                                    <div className="flex items-center gap-1">
+                                      <Badge variant="secondary" className="text-xs">
+                                        <Lock className="h-3 w-3 ml-1" />
+                                        {pinned.length} נעולים
+                                      </Badge>
+                                      <button
+                                        className="text-red-500 hover:text-red-600 cursor-pointer"
+                                        title="שחרר נעילה"
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          await updateTrack(t.id, { pinned_slots: null });
+                                          qc.invalidateQueries({ queryKey: ["grouping-clusters", schoolId] });
+                                          toast.success("נעילה שוחררה");
+                                        }}
+                                      >
+                                        <LockOpen className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  );
+                                },
+                                className: "w-28",
                               },
                               {
                                 header: "פעולות",
@@ -2269,6 +2781,68 @@ export default function GroupingsPage() {
           )}
         />
       )}
+
+      {linkReqId != null && (() => {
+        const sourceReq = allRequirements.find((r) => r.id === linkReqId);
+        const sourceSubj = linkReqSubjectId ? subjectMap[linkReqSubjectId] : null;
+        // Find similar requirements from other classes (same subject, standalone)
+        const candidates = requirements.filter((r) =>
+          r.id !== linkReqId
+          && r.subject_id === linkReqSubjectId
+          && !r.is_grouped
+          && r.class_group_id !== linkReqClassId
+        );
+        return (
+          <Dialog open onClose={() => setLinkReqId(null)}>
+            <DialogHeader>
+              <DialogTitle>חבר להקבצה — {sourceSubj?.name}</DialogTitle>
+            </DialogHeader>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (linkTargetReqId !== "") {
+                  linkToClusterMut.mutate({ reqId: linkReqId, partnerReqId: Number(linkTargetReqId) });
+                }
+              }}
+              className="space-y-4"
+            >
+              <p className="text-sm text-muted-foreground">
+                בחר דרישה דומה מכיתה אחרת ליצירת הקבצה משותפת:
+              </p>
+              <div>
+                <Label>דרישה לחיבור</Label>
+                <Select
+                  value={linkTargetReqId}
+                  onChange={(e) => setLinkTargetReqId(e.target.value ? Number(e.target.value) : "")}
+                  required
+                >
+                  <option value="">בחר דרישה...</option>
+                  {candidates.map((r) => {
+                    const cls = classes.find((c) => c.id === r.class_group_id);
+                    const teacher = r.teacher_id ? teacherMap[r.teacher_id] : "—";
+                    return (
+                      <option key={r.id} value={r.id}>
+                        {cls?.name ?? "?"} — {teacher} — {r.hours_per_week} ש׳
+                      </option>
+                    );
+                  })}
+                </Select>
+                {candidates.length === 0 && (
+                  <p className="text-xs text-muted-foreground mt-2">
+                    לא נמצאו דרישות דומות (אותו מקצוע, עצמאיות) בכיתות אחרות
+                  </p>
+                )}
+              </div>
+              <DialogFooter>
+                <Button type="submit" disabled={linkToClusterMut.isPending || linkTargetReqId === "" || candidates.length === 0}>
+                  {linkToClusterMut.isPending ? "יוצר הקבצה..." : "צור הקבצה"}
+                </Button>
+                <Button type="button" variant="outline" onClick={() => setLinkReqId(null)}>ביטול</Button>
+              </DialogFooter>
+            </form>
+          </Dialog>
+        );
+      })()}
 
       {toReqTrack && (
         <Dialog open={!!toReqTrack} onClose={() => { setToReqTrack(null); setToReqClassId(""); }}>

@@ -27,6 +27,7 @@ def _meeting_to_read(meeting: Meeting) -> MeetingRead:
         allow_overlap=meeting.allow_overlap,
         require_consecutive=meeting.require_consecutive,
         locked_teacher_ids=meeting.locked_teacher_ids,
+        alternative_slots=meeting.alternative_slots,
     )
 
 
@@ -60,10 +61,15 @@ def _sync_teachers(meeting: Meeting, teacher_ids: list[int], db: Session) -> Non
 
 @router.post("", response_model=MeetingRead, status_code=201)
 def create_meeting(data: MeetingCreate, db: Session = Depends(get_db)):
-    payload = data.model_dump(exclude={"teacher_ids", "pinned_slots"})
+    payload = data.model_dump(exclude={"teacher_ids", "pinned_slots", "alternative_slots"})
     payload["pinned_slots"] = (
         [{"day": p.day, "period": p.period} for p in data.pinned_slots]
         if data.pinned_slots
+        else None
+    )
+    payload["alternative_slots"] = (
+        [{"day": p.day, "period": p.period} for p in data.alternative_slots]
+        if data.alternative_slots
         else None
     )
     meeting = Meeting(**payload)
@@ -109,6 +115,7 @@ def update_meeting(
     updates = data.model_dump(exclude_unset=True)
     teacher_ids = updates.pop("teacher_ids", None)
     pinned_slots_raw = updates.pop("pinned_slots", None)
+    alternative_slots_raw = updates.pop("alternative_slots", None)
     for key, value in updates.items():
         setattr(meeting, key, value)
 
@@ -116,6 +123,13 @@ def update_meeting(
         meeting.pinned_slots = (
             [{"day": p["day"], "period": p["period"]} for p in pinned_slots_raw]
             if pinned_slots_raw
+            else None
+        )
+
+    if "alternative_slots" in data.model_dump(exclude_unset=True):
+        meeting.alternative_slots = (
+            [{"day": p["day"], "period": p["period"]} for p in alternative_slots_raw]
+            if alternative_slots_raw
             else None
         )
 

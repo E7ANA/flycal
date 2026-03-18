@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Pencil, Trash2, Calendar } from "lucide-react";
@@ -177,9 +177,6 @@ function TeacherFormDialog({
   const [name, setName] = useState(teacher?.name ?? "");
   const [maxHours, setMaxHours] = useState(teacher?.max_hours_per_week ?? 40);
   const [minHours, setMinHours] = useState(teacher?.min_hours_per_week ?? 0);
-  const [employment, setEmployment] = useState(
-    teacher?.employment_percentage ?? 100,
-  );
   const [rubricaHours, setRubricaHours] = useState<string>(
     teacher?.rubrica_hours != null ? String(teacher.rubrica_hours) : "",
   );
@@ -244,7 +241,6 @@ function TeacherFormDialog({
         name,
         max_hours_per_week: maxHours,
         min_hours_per_week: minHours || null,
-        employment_percentage: employment,
         rubrica_hours: rubricaHours !== "" ? Number(rubricaHours) : null,
         max_work_days: maxWorkDays !== "" ? Number(maxWorkDays) : null,
         subject_ids: selectedSubjectIds,
@@ -271,7 +267,6 @@ function TeacherFormDialog({
         name,
         max_hours_per_week: maxHours,
         min_hours_per_week: minHours || null,
-        employment_percentage: employment,
         rubrica_hours: rubricaHours !== "" ? Number(rubricaHours) : null,
         max_work_days: maxWorkDays !== "" ? Number(maxWorkDays) : null,
         subject_ids: selectedSubjectIds,
@@ -325,11 +320,11 @@ function TeacherFormDialog({
 
         <div className="grid grid-cols-4 gap-3">
           <div>
-            <Label htmlFor="max-hours">מקס׳ שעות</Label>
+            <Label htmlFor="max-hours">ש׳ פרונטליות</Label>
             <Input
               id="max-hours"
               type="number"
-              min={1}
+              min={0}
               value={maxHours}
               onChange={(e) => setMaxHours(Number(e.target.value))}
             />
@@ -345,18 +340,7 @@ function TeacherFormDialog({
             />
           </div>
           <div>
-            <Label htmlFor="employment">% משרה</Label>
-            <Input
-              id="employment"
-              type="number"
-              min={0}
-              max={100}
-              value={employment}
-              onChange={(e) => setEmployment(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <Label htmlFor="rubrica-hours">רובריקה (סה״כ שעות משרה)</Label>
+            <Label htmlFor="rubrica-hours">שעות משרה</Label>
             <Input
               id="rubrica-hours"
               type="number"
@@ -374,7 +358,7 @@ function TeacherFormDialog({
                     : Number(rubricaHours) >= 20
                       ? "→ עד 3 ימי עבודה"
                       : "→ עד 2 ימי עבודה"
-                  : "לא הוגדרה — ימי עבודה ייקבעו לפי שעות פרונטליות"}
+                  : "לא הוגדרו — ימי עבודה ייקבעו לפי שעות משרה"}
               </p>
             )}
           </div>
@@ -391,8 +375,8 @@ function TeacherFormDialog({
             />
             <p className="text-xs text-muted-foreground mt-1">
               {maxWorkDays !== ""
-                ? `→ ${maxWorkDays} ימי עבודה (גובר על רובריקה)`
-                : "ריק = חישוב אוטומטי לפי רובריקה"}
+                ? `→ ${maxWorkDays} ימי עבודה (גובר על חישוב אוטומטי)`
+                : "ריק = חישוב אוטומטי לפי שעות משרה"}
             </p>
           </div>
         </div>
@@ -558,6 +542,7 @@ export default function TeachersPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Teacher | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Teacher | null>(null);
+  const [blocksTarget, setBlocksTarget] = useState<Teacher | null>(null);
 
   const { data: teachers = [] } = useQuery({
     queryKey: ["teachers", schoolId],
@@ -577,6 +562,14 @@ export default function TeachersPage() {
     enabled: !!schoolId,
   });
 
+  const { data: school } = useQuery({
+    queryKey: ["school", schoolId],
+    queryFn: () => fetchSchool(schoolId!),
+    enabled: !!schoolId,
+  });
+
+
+
   const deleteMut = useMutation({
     mutationFn: () => deleteTeacher(deleteTarget!.id),
     onSuccess: () => {
@@ -586,6 +579,35 @@ export default function TeachersPage() {
     },
     onError: () => toast.error("שגיאה במחיקה"),
   });
+
+  const saveBlocksMut = useMutation({
+    mutationFn: (params: { id: number; blocked_slots: BlockedSlot[] }) =>
+      updateTeacher(params.id, { blocked_slots: params.blocked_slots }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["teachers", schoolId] });
+      toast.success("חסימות עודכנו");
+      setBlocksTarget(null);
+    },
+    onError: () => toast.error("שגיאה בעדכון חסימות"),
+  });
+
+  // School days for blocked-slots grid
+  const activeDays = school
+    ? (() => {
+        const start = DAY_ORDER.indexOf(school.week_start_day);
+        const days: string[] = [];
+        for (let i = 0; i < school.days_per_week; i++) {
+          days.push(DAY_ORDER[(start + i) % DAY_ORDER.length]);
+        }
+        return days;
+      })()
+    : [];
+  const periodsPerDay: Record<string, number> = {};
+  if (school) {
+    for (const day of activeDays) {
+      periodsPerDay[day] = school.periods_per_day_map?.[day] ?? school.periods_per_day;
+    }
+  }
 
   const subjectMap = Object.fromEntries(subjects.map((s) => [s.id, s]));
   const classMap = Object.fromEntries(classes.map((c) => [c.id, c.name]));
@@ -623,14 +645,14 @@ export default function TeachersPage() {
         columns={[
           { header: "שם", accessor: "name" },
           {
-            header: "שעות",
+            header: "ש׳ פרונטליות",
             accessor: (t) =>
               t.min_hours_per_week
                 ? `${t.min_hours_per_week}–${t.max_hours_per_week}`
                 : String(t.max_hours_per_week),
           },
           {
-            header: "רובריקה",
+            header: "שעות משרה",
             accessor: (t) =>
               t.rubrica_hours != null
                 ? String(t.rubrica_hours)
@@ -655,19 +677,12 @@ export default function TeachersPage() {
                 else maxDays = 2;
               }
               return maxDays != null ? (
-                <span className="text-muted-foreground" title="לפי רובריקה">
+                <span className="text-muted-foreground" title="לפי שעות משרה">
                   {maxDays} ימים
                 </span>
               ) : "—";
             },
             className: "w-24",
-          },
-          {
-            header: "% משרה",
-            accessor: (t) =>
-              t.employment_percentage != null
-                ? `${t.employment_percentage}%`
-                : "—",
           },
           {
             header: "תפקידים",
@@ -689,12 +704,47 @@ export default function TeachersPage() {
           },
           {
             header: "חסימות",
-            accessor: (t) =>
-              t.blocked_slots.length > 0 ? (
-                <Badge variant="outline">{t.blocked_slots.length} שעות</Badge>
-              ) : (
-                <span className="text-muted-foreground text-sm">—</span>
-              ),
+            accessor: (t) => {
+              const slots = t.blocked_slots ?? [];
+              if (slots.length === 0) {
+                return <span className="text-muted-foreground text-sm">—</span>;
+              }
+
+              // Group blocked slots by day
+              const daySlots: Record<string, number[]> = {};
+              for (const s of slots) {
+                if (!daySlots[s.day]) daySlots[s.day] = [];
+                daySlots[s.day].push(s.period);
+              }
+
+              return (
+                <div className="flex flex-wrap gap-1 items-center">
+                  {DAY_ORDER.filter((d) => daySlots[d]).map((day) => {
+                    const periods = daySlots[day].sort((a, b) => a - b);
+                    const maxPeriods = periodsPerDay[day] ?? school?.periods_per_day ?? 8;
+                    const isFullDay = periods.length >= maxPeriods;
+                    return (
+                      <Badge
+                        key={day}
+                        variant={isFullDay ? "destructive" : "outline"}
+                        className="text-[10px] px-1.5 py-0"
+                        title={isFullDay
+                          ? `${DAY_LABELS[day]} — יום חסום`
+                          : `${DAY_LABELS[day]} — שעות ${periods.join(",")}`
+                        }
+                      >
+                        {DAY_LABELS[day]}
+                        {!isFullDay && (
+                          <span className="text-muted-foreground mr-0.5">
+                            ({periods.length})
+                          </span>
+                        )}
+                      </Badge>
+                    );
+                  })}
+                </div>
+              );
+            },
           },
           {
             header: "מקצועות",
@@ -735,6 +785,7 @@ export default function TeachersPage() {
                 <Button
                   variant="ghost"
                   size="icon"
+                  title="עריכה"
                   onClick={(e) => {
                     e.stopPropagation();
                     setEditing(t);
@@ -746,6 +797,7 @@ export default function TeachersPage() {
                 <Button
                   variant="ghost"
                   size="icon"
+                  title="מחיקה"
                   onClick={(e) => {
                     e.stopPropagation();
                     setDeleteTarget(t);
@@ -755,7 +807,7 @@ export default function TeachersPage() {
                 </Button>
               </div>
             ),
-            className: "w-32",
+            className: "w-28",
           },
         ]}
         emptyMessage="אין מורים — הוסף מורה חדש/ה"
@@ -778,6 +830,58 @@ export default function TeachersPage() {
         message={`האם למחוק את "${deleteTarget?.name}"? פעולה זו לא ניתנת לביטול.`}
         loading={deleteMut.isPending}
       />
+
+      {blocksTarget && (
+        <BlockedSlotsDialog
+          teacher={blocksTarget}
+          onClose={() => setBlocksTarget(null)}
+          onSave={(slots) => saveBlocksMut.mutate({ id: blocksTarget.id, blocked_slots: slots })}
+          saving={saveBlocksMut.isPending}
+          days={activeDays}
+          periodsPerDay={periodsPerDay}
+        />
+      )}
     </div>
+  );
+}
+
+// ─── Quick Blocked Slots Dialog ──────────────────────────
+function BlockedSlotsDialog({
+  teacher,
+  onClose,
+  onSave,
+  saving,
+  days,
+  periodsPerDay,
+}: {
+  teacher: Teacher;
+  onClose: () => void;
+  onSave: (slots: BlockedSlot[]) => void;
+  saving: boolean;
+  days: string[];
+  periodsPerDay: Record<string, number>;
+}) {
+  const [slots, setSlots] = useState<BlockedSlot[]>(teacher.blocked_slots ?? []);
+
+  return (
+    <Dialog open onClose={onClose}>
+      <DialogHeader>
+        <DialogTitle>חסימות — {teacher.name}</DialogTitle>
+      </DialogHeader>
+      <div className="py-2">
+        <AvailabilityGrid
+          blockedSlots={slots}
+          onChange={setSlots}
+          days={days}
+          periodsPerDay={periodsPerDay}
+        />
+      </div>
+      <DialogFooter>
+        <Button onClick={() => onSave(slots)} disabled={saving}>
+          {saving ? "שומר..." : "שמור"}
+        </Button>
+        <Button variant="outline" onClick={onClose}>ביטול</Button>
+      </DialogFooter>
+    </Dialog>
   );
 }

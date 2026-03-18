@@ -10,6 +10,9 @@ class SubjectCreate(BaseModel):
     always_double: bool = False
     blocked_slots: list[dict] | None = None
     limit_last_periods: bool = False
+    is_hidden: bool = False
+    link_group: str | None = None
+    link_group_max_per_day: int | None = None
 
 
 class SubjectUpdate(BaseModel):
@@ -20,6 +23,9 @@ class SubjectUpdate(BaseModel):
     always_double: bool | None = None
     blocked_slots: list[dict] | None = None
     limit_last_periods: bool | None = None
+    is_hidden: bool | None = None
+    link_group: str | None = None
+    link_group_max_per_day: int | None = None
 
 
 class SubjectRead(BaseModel):
@@ -32,6 +38,9 @@ class SubjectRead(BaseModel):
     always_double: bool
     blocked_slots: list[dict] | None = None
     limit_last_periods: bool = False
+    is_hidden: bool = False
+    link_group: str | None = None
+    link_group_max_per_day: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -58,6 +67,7 @@ class SubjectRequirementCreate(BaseModel):
     consecutive_mode: str | None = None
     morning_priority: int | None = None
     allow_overlap: bool = False
+    is_hidden: bool = False
 
 
 class SubjectRequirementUpdate(BaseModel):
@@ -74,6 +84,7 @@ class SubjectRequirementUpdate(BaseModel):
     consecutive_mode: str | None = None
     morning_priority: int | None = None
     allow_overlap: bool | None = None
+    is_hidden: bool | None = None
 
 
 class SubjectRequirementRead(BaseModel):
@@ -94,5 +105,6 @@ class SubjectRequirementRead(BaseModel):
     consecutive_mode: str | None
     morning_priority: int | None
     allow_overlap: bool
+    is_hidden: bool = False
 
     model_config = {"from_attributes": True}

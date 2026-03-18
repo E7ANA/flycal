@@ -39,6 +39,10 @@ class ClassGroup(Base):
     name: Mapped[str] = mapped_column(String(100))
     grade_id: Mapped[int] = mapped_column(ForeignKey("grades.id"))
     num_students: Mapped[int] = mapped_column(Integer, default=0)
+    # When True: homeroom teacher MUST teach this class every day she's at school (HARD)
+    # When False (default): preferred but not mandatory (SOFT)
+    homeroom_daily_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    shahaf_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     grade: Mapped["Grade"] = relationship(back_populates="class_groups")
     subject_requirements: Mapped[list["SubjectRequirement"]] = relationship(

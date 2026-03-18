@@ -30,10 +30,11 @@ export async function deleteSubject(id: number): Promise<void> {
 // ─── Requirements ────────────────────────────────────────
 export async function fetchRequirements(
   schoolId: number,
+  includeGrouped = true,
 ): Promise<SubjectRequirement[]> {
   const { data } = await api.get<SubjectRequirement[]>(
     "/subject-requirements",
-    { params: { school_id: schoolId } },
+    { params: { school_id: schoolId, include_grouped: includeGrouped } },
   );
   return data;
 }

@@ -39,10 +39,14 @@ class SolverData:
     teacher_rubrica_map: dict[int, float] = field(default_factory=dict)
     # teacher_id -> manual override for max work days
     teacher_max_work_days: dict[int, int] = field(default_factory=dict)
+    # teacher_ids exempt from "must teach on meeting day" (management + counselors)
+    meeting_day_exempt_ids: set[int] = field(default_factory=set)
     # Specific overlap pairs: set of ((type1, id1), (type2, id2)) — normalized
     allowed_overlap_pairs: set[tuple[tuple[str, int], tuple[str, int]]] = field(
         default_factory=set
     )
+    # grade_id -> {day: max_period} from GRADE_ACTIVITY_HOURS constraints
+    grade_periods_map: dict[int, dict[str, int]] = field(default_factory=dict)
     # Derived lookups
     available_slots: list[tuple[str, int]] = field(default_factory=list)
     days: list[str] = field(default_factory=list)
@@ -104,11 +108,18 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
     class_groups = (
         db.query(ClassGroup).filter(ClassGroup.school_id == school_id).all()
     )
-    requirements = (
-        db.query(SubjectRequirement)
+    # Filter out hidden requirements and requirements for hidden subjects
+    hidden_subject_ids = {
+        s.id for s in db.query(Subject).filter(
+            Subject.school_id == school_id, Subject.is_hidden == True
+        ).all()
+    }
+    requirements = [
+        r for r in db.query(SubjectRequirement)
         .filter(SubjectRequirement.school_id == school_id)
         .all()
-    )
+        if r.subject_id not in hidden_subject_ids and not r.is_hidden and not r.is_grouped
+    ]
     timeslots = (
         db.query(TimeSlot).filter(TimeSlot.school_id == school_id).all()
     )
@@ -155,12 +166,14 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
     homeroom_map: dict[int, int] = {}
     teacher_rubrica_map: dict[int, float] = {}
     teacher_max_work_days: dict[int, int] = {}
+    meeting_day_exempt_ids: set[int] = set()
     if all_teacher_ids:
         teachers_with_blocks = (
             db.query(Teacher)
             .filter(Teacher.id.in_(all_teacher_ids))
             .all()
         )
+        meeting_day_exempt_ids: set[int] = set()
         for t in teachers_with_blocks:
             if t.blocked_slots:
                 teacher_blocked_slots[t.id] = {
@@ -172,6 +185,15 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
                 teacher_rubrica_map[t.id] = t.rubrica_hours
             if t.max_work_days is not None:
                 teacher_max_work_days[t.id] = t.max_work_days
+            # Management and counselors exempt from meeting-day teaching rule
+            if (
+                getattr(t, "is_management", False)
+                or getattr(t, "is_principal", False)
+                or getattr(t, "is_director", False)
+                or getattr(t, "is_pedagogical_coordinator", False)
+                or getattr(t, "is_counselor", False)
+            ):
+                meeting_day_exempt_ids.add(t.id)
 
     # Load MIN_FREE_DAYS constraints for brain integration
     from app.models.constraint import Constraint
@@ -193,6 +215,23 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
                 min_free_days_map[c.target_id] = max(
                     min_free_days_map.get(c.target_id, 0), min_days
                 )
+
+    # Load GRADE_ACTIVITY_HOURS constraints for validation
+    grade_periods_map: dict[int, dict[str, int]] = {}
+    gah_constraints = (
+        db.query(Constraint)
+        .filter(
+            Constraint.school_id == school_id,
+            Constraint.rule_type == "GRADE_ACTIVITY_HOURS",
+            Constraint.is_active == True,
+        )
+        .all()
+    )
+    for c in gah_constraints:
+        if c.target_id is not None:
+            pmap = (c.parameters or {}).get("periods_per_day_map", {})
+            if pmap:
+                grade_periods_map[c.target_id] = pmap
 
     # Load specific allowed overlap pairs
     from app.models.timetable import AllowedOverlap
@@ -218,8 +257,10 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
         homeroom_map=homeroom_map,
         teacher_rubrica_map=teacher_rubrica_map,
         teacher_max_work_days=teacher_max_work_days,
+        meeting_day_exempt_ids=meeting_day_exempt_ids,
         min_free_days_map=min_free_days_map,
         allowed_overlap_pairs=allowed_overlap_pairs,
+        grade_periods_map=grade_periods_map,
     )
 
 
@@ -302,6 +343,7 @@ def add_system_constraints(
     _add_meeting_consecutive_periods(model, data, variables)
     _add_meetings_on_teaching_days(model, data, variables)
     _add_teacher_blocked_slots(model, data, variables)
+    _add_homeroom_must_teach_sunday(model, data, variables)
     _add_secondary_track_end_of_day(model, data, variables)
     _add_pinned_lessons(model, data, variables)
     _add_pinned_meetings(model, data, variables)
@@ -309,11 +351,13 @@ def add_system_constraints(
     _add_blocked_requirement_slots(model, data, variables)
     _add_blocked_track_slots(model, data, variables)
     _add_blocked_meeting_slots(model, data, variables)
+    _add_plenary_no_overlap_with_meetings(model, data, variables)
     _add_grouping_contiguous_prefix(model, data, variables)
     _add_grouping_extra_hours_end_of_day(model, data, variables)
     _add_linked_tracks_no_overlap(model, data, variables)
     _add_subject_blocked_slots(model, data, variables)
     _add_high_school_daily_core(model, data, variables)
+    _add_subject_link_group_daily_limit(model, data, variables)
     _add_subject_limit_last_periods(model, data, variables)
     _add_teacher_late_finish_limit(model, data, variables)
 
@@ -374,9 +418,17 @@ def _add_teacher_no_overlap(
                     items_at_slot.append(("requirement", rid, var))
 
             # Track variables for this teacher at this slot
+            # For synced clusters: only add ONE track per teacher per cluster
+            # (all tracks are synced to same slots, so multiple tracks = same physical lesson)
+            seen_teacher_clusters: set[int] = set()
             for cluster in data.clusters:
                 for track in cluster.tracks:
                     if track.teacher_id == teacher_id:
+                        # Skip if we already added a track for this teacher in this cluster
+                        cluster_key = cluster.id
+                        if cluster_key in seen_teacher_clusters:
+                            continue
+                        seen_teacher_clusters.add(cluster_key)
                         tk = (track.id, day, period)
                         if tk in variables.x_track:
                             items_at_slot.append(("track", track.id, variables.x_track[tk]))
@@ -850,11 +902,13 @@ def _add_meetings_on_teaching_days(
         # excused — they cannot attend and must not constrain the meeting.
         pinned = getattr(meeting, "pinned_slots", None) or []
         pinned_set: set[tuple[str, int]] = set()
+        pinned_days: set[str] = set()
         for pin in pinned:
             d = pin.get("day") if isinstance(pin, dict) else getattr(pin, "day", None)
             p = pin.get("period") if isinstance(pin, dict) else getattr(pin, "period", None)
             if d is not None and p is not None:
                 pinned_set.add((d, p))
+                pinned_days.add(d)
 
         conflicting_teacher_ids: set[int] = set()
         if pinned_set:
@@ -872,6 +926,11 @@ def _add_meetings_on_teaching_days(
                     day_meeting_vars.append(var)
 
             if not day_meeting_vars:
+                continue
+
+            # If meeting is pinned to this day, skip frontal-lesson enforcement.
+            # The teacher is already committed to being at school for the meeting.
+            if day in pinned_days:
                 continue
 
             # Determine which teachers to enforce for this meeting
@@ -894,8 +953,13 @@ def _add_meetings_on_teaching_days(
             # no meeting can be scheduled on this day.
             # Skip teachers with no teaching assignments at all (admins/managers) —
             # they can attend meetings on any day.
+            # Skip management + counselor staff — exempt from meeting-day rule.
             # Also skip teachers excused from this meeting (approved via overlap system).
             for teacher in enforced_teachers:
+                # Management/counselor staff exempt from teaching-day requirement
+                if teacher.id in data.meeting_day_exempt_ids:
+                    continue
+
                 # Check if teacher is excused from this meeting
                 excused_pair = _normalize_pair(
                     "meeting", meeting.id, "teacher_absence", teacher.id
@@ -987,6 +1051,38 @@ def _add_teacher_blocked_slots(
 
 
 # ---------------------------------------------------------------------------
+# System Constraint 9b: Homeroom Teachers Must Teach on Sunday
+# Homeroom teachers (מחנכות) cannot have Sunday as a free day.
+# ---------------------------------------------------------------------------
+def _add_homeroom_must_teach_sunday(
+    model: cp_model.CpModel, data: SolverData, variables: SolverVariables
+) -> None:
+    """Homeroom teacher must teach HER class at period 1 on Sunday (open the morning)."""
+    if not data.homeroom_map:
+        return
+
+    sunday = None
+    for d in data.days:
+        if str(d) == "SUNDAY" or (hasattr(d, 'value') and d.value == "SUNDAY"):
+            sunday = d
+            break
+    if sunday is None:
+        return
+
+    for teacher_id, class_id in data.homeroom_map.items():
+        # Find vars where this teacher teaches THIS class on Sunday period 1
+        period1_vars: list[cp_model.IntVar] = []
+        for key, var in variables.x.items():
+            c_id, _s, t_id, day, period = key
+            if t_id == teacher_id and c_id == class_id and day == sunday and period == 1:
+                period1_vars.append(var)
+
+        if period1_vars:
+            # Must teach her class at Sunday period 1
+            model.add(sum(period1_vars) >= 1)
+
+
+# ---------------------------------------------------------------------------
 # System Constraint 10: Secondary Track End-of-Day Preference
 # Secondary tracks (מגמה שניה) are preferred at the end of the school day.
 # ---------------------------------------------------------------------------
@@ -1044,8 +1140,19 @@ def _add_pinned_meetings(
 ) -> None:
     for meeting in data.meetings:
         pinned = getattr(meeting, "pinned_slots", None)
+        alternative = getattr(meeting, "alternative_slots", None)
+
         if not pinned:
             continue
+
+        # If meeting has alternative slots, solver picks primary OR alternative
+        if alternative and meeting.meeting_type == MeetingType.PLENARY.value:
+            _add_pinned_meeting_with_alternatives(
+                model, data, variables, meeting, pinned, alternative
+            )
+            continue
+
+        # Standard: pin exactly at pinned slots
         for pin in pinned:
             day = pin.get("day") if isinstance(pin, dict) else getattr(pin, "day", None)
             period = pin.get("period") if isinstance(pin, dict) else getattr(pin, "period", None)
@@ -1054,6 +1161,55 @@ def _add_pinned_meetings(
             key = (meeting.id, day, period)
             if key in variables.x_meeting:
                 model.add(variables.x_meeting[key] == 1)
+
+
+def _add_pinned_meeting_with_alternatives(
+    model: cp_model.CpModel,
+    data: SolverData,
+    variables: SolverVariables,
+    meeting,
+    pinned: list,
+    alternative: list,
+) -> None:
+    """Plenary with alternative slots: must be at primary OR alternative set."""
+
+    def _parse_slots(slots):
+        result = []
+        for s in slots:
+            d = s.get("day") if isinstance(s, dict) else getattr(s, "day", None)
+            p = s.get("period") if isinstance(s, dict) else getattr(s, "period", None)
+            if d is not None and p is not None:
+                result.append((d, p))
+        return result
+
+    primary_slots = _parse_slots(pinned)
+    alt_slots = _parse_slots(alternative)
+
+    if not primary_slots:
+        return
+
+    # use_primary = 1 → scheduled at primary slots, 0 → at alternative slots
+    use_primary = model.new_bool_var(f"plenary_{meeting.id}_use_primary")
+
+    # If use_primary: all primary slots are 1
+    for day, period in primary_slots:
+        key = (meeting.id, day, period)
+        if key in variables.x_meeting:
+            model.add(variables.x_meeting[key] == 1).only_enforce_if(use_primary)
+
+    # If NOT use_primary: all alternative slots are 1
+    if alt_slots:
+        for day, period in alt_slots:
+            key = (meeting.id, day, period)
+            if key in variables.x_meeting:
+                model.add(variables.x_meeting[key] == 1).only_enforce_if(use_primary.negated())
+
+    # Block all non-chosen slots
+    all_chosen = set(primary_slots) | set(alt_slots)
+    for key in variables.x_meeting:
+        m_id, d, p = key
+        if m_id == meeting.id and (d, p) not in all_chosen:
+            model.add(variables.x_meeting[key] == 0)
 
 
 # ---------------------------------------------------------------------------
@@ -1144,6 +1300,40 @@ def _add_blocked_meeting_slots(
             key = (meeting.id, day, period)
             if key in variables.x_meeting:
                 model.add(variables.x_meeting[key] == 0)
+
+
+# ---------------------------------------------------------------------------
+# System Constraint 11g: Plenary No Overlap With Other Meetings
+# When a plenary (מליאה) meeting is scheduled at a timeslot, no other
+# meeting can be scheduled at that same timeslot.
+# ---------------------------------------------------------------------------
+def _add_plenary_no_overlap_with_meetings(
+    model: cp_model.CpModel, data: SolverData, variables: SolverVariables
+) -> None:
+    plenary_meetings = [
+        m for m in data.meetings
+        if m.meeting_type == MeetingType.PLENARY.value and m.teachers
+    ]
+    if not plenary_meetings:
+        return
+
+    other_meetings = [
+        m for m in data.meetings
+        if m.meeting_type != MeetingType.PLENARY.value and m.teachers
+    ]
+    if not other_meetings:
+        return
+
+    for plenary in plenary_meetings:
+        for other in other_meetings:
+            for day, period in data.available_slots:
+                pk = (plenary.id, day, period)
+                ok = (other.id, day, period)
+                pv = variables.x_meeting.get(pk)
+                ov = variables.x_meeting.get(ok)
+                if pv is not None and ov is not None:
+                    # At most one can be active at this timeslot
+                    model.add(pv + ov <= 1)
 
 
 # ---------------------------------------------------------------------------
@@ -1423,6 +1613,7 @@ def _add_teacher_late_finish_limit(
     EARLY_MAX = 6      # ביום "קצר" — עד שעה שישית
     MAX_LATE_DAYS_HOMEROOM = 2
     MAX_LATE_DAYS_REGULAR = 3
+    MIN_SHORT_DAYS_HOMEROOM = 1  # מחנכת: לפחות יום אחד קצר (עד שעה 6)
 
     # Build teacher -> track_id set for fast lookup
     teacher_track_ids: dict[int, set[int]] = {}
@@ -1430,6 +1621,12 @@ def _add_teacher_late_finish_limit(
         for track in cluster.tracks:
             if track.teacher_id is not None:
                 teacher_track_ids.setdefault(track.teacher_id, set()).add(track.id)
+
+    # Build teacher -> meeting_ids for meeting participation
+    teacher_meeting_ids: dict[int, set[int]] = {}
+    for meeting in data.meetings:
+        for t in meeting.teachers:
+            teacher_meeting_ids.setdefault(t.id, set()).add(meeting.id)
 
     # Collect all teaching teacher IDs
     teacher_ids: set[int] = set()
@@ -1442,6 +1639,7 @@ def _add_teacher_late_finish_limit(
         is_homeroom = teacher_id in data.homeroom_map
         max_late = MAX_LATE_DAYS_HOMEROOM if is_homeroom else MAX_LATE_DAYS_REGULAR
         my_track_ids = teacher_track_ids.get(teacher_id, set())
+        my_meeting_ids = teacher_meeting_ids.get(teacher_id, set())
 
         # Collect vars per day at period >= LATE_PERIOD (for "late" bool)
         late_vars_by_day: dict[str, list] = {}
@@ -1466,6 +1664,16 @@ def _add_teacher_late_finish_limit(
             if period > EARLY_MAX:
                 after6_vars_by_day.setdefault(day, []).append(var)
 
+        # Include meetings in late-day counting
+        for key, var in variables.x_meeting.items():
+            m_id, day, period = key
+            if m_id not in my_meeting_ids:
+                continue
+            if period >= LATE_PERIOD:
+                late_vars_by_day.setdefault(day, []).append(var)
+            if period > EARLY_MAX:
+                after6_vars_by_day.setdefault(day, []).append(var)
+
         # --- Limit: max N days with period >= 8 ---
         day_late_bools: dict[str, cp_model.IntVar] = {}
         for day, dvars in late_vars_by_day.items():
@@ -1476,10 +1684,27 @@ def _add_teacher_late_finish_limit(
         if day_late_bools:
             model.add(sum(day_late_bools.values()) <= max_late)
 
+        # --- Homeroom teachers: at least 1 short day (finish by period 6) ---
+        # Extends the 2-late-days limit: out of remaining days, at least 1 is short
+        if is_homeroom:
+            day_short_bools: list[cp_model.IntVar] = []
+            for day in data.days:
+                dvars_after6 = after6_vars_by_day.get(day)
+                if not dvars_after6:
+                    # No vars after period 6 → always a short day
+                    day_short_bools.append(model.new_constant(1))
+                else:
+                    has_late = model.new_bool_var(f"has_after6_t{teacher_id}_{day}")
+                    model.add_max_equality(has_late, dvars_after6)
+                    day_short_bools.append(has_late.negated())
+
+            if day_short_bools:
+                model.add(sum(day_short_bools) >= MIN_SHORT_DAYS_HOMEROOM)
+
         # --- Regular teachers: on non-late days, finish by period 6 ---
         if not is_homeroom:
             for day, dvars_after6 in after6_vars_by_day.items():
-                # is_late_day = 1 iff teacher teaches at period >= 8 on this day
+                # is_late_day = 1 iff teacher has activity at period >= 8 on this day
                 is_late_day = day_late_bools.get(day)
                 if is_late_day is None:
                     # No vars at period 8+ on this day → this is always an "early day"
@@ -1490,3 +1715,49 @@ def _add_teacher_late_finish_limit(
                     # If NOT a late day → no lessons after period 6
                     for v in dvars_after6:
                         model.add(v == 0).only_enforce_if(is_late_day.negated())
+
+
+def _add_subject_link_group_daily_limit(
+    model: cp_model.CpModel, data: SolverData, variables: SolverVariables
+) -> None:
+    """HARD: subjects with same link_group share a daily max per class.
+
+    E.g., תורה + נביא + תושב"ע all in link_group "תנ"ך" with max_per_day=2
+    means a class can have at most 2 combined hours of these subjects per day.
+    """
+    from collections import defaultdict
+
+    # Build link_group -> (subject_ids, max_per_day)
+    link_groups: dict[str, dict] = {}
+    for subj in data.all_subjects:
+        if subj.link_group:
+            if subj.link_group not in link_groups:
+                link_groups[subj.link_group] = {
+                    "subject_ids": set(),
+                    "max_per_day": subj.link_group_max_per_day or 2,
+                }
+            link_groups[subj.link_group]["subject_ids"].add(subj.id)
+            # Use the minimum max_per_day across all subjects in the group
+            if subj.link_group_max_per_day is not None:
+                link_groups[subj.link_group]["max_per_day"] = min(
+                    link_groups[subj.link_group]["max_per_day"],
+                    subj.link_group_max_per_day,
+                )
+
+    if not link_groups:
+        return
+
+    # For each class, for each day, sum all vars of linked subjects and cap at max
+    for lg_name, lg_info in link_groups.items():
+        subject_ids = lg_info["subject_ids"]
+        max_per_day = lg_info["max_per_day"]
+
+        for cg in data.class_groups:
+            for day in data.days:
+                day_vars = []
+                for key, var in variables.x.items():
+                    cg_id, subj_id, _t_id, d, _p = key
+                    if cg_id == cg.id and subj_id in subject_ids and d == day:
+                        day_vars.append(var)
+                if day_vars:
+                    model.add(sum(day_vars) <= max_per_day)

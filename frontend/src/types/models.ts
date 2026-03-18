@@ -8,6 +8,7 @@ export interface School {
   break_slots: number[];
   week_start_day: string;
   periods_per_day_map: Record<string, number> | null;
+  max_consecutive_meetings: number;
 }
 
 // ─── Grade & ClassGroup ──────────────────────────────────
@@ -24,6 +25,7 @@ export interface ClassGroup {
   grade_id: number;
   school_id: number;
   num_students: number;
+  homeroom_daily_required: boolean;
 }
 
 // ─── Teacher ─────────────────────────────────────────────
@@ -38,7 +40,6 @@ export interface Teacher {
   school_id: number;
   max_hours_per_week: number;
   min_hours_per_week: number | null;
-  employment_percentage: number | null;
   rubrica_hours: number | null;
   max_work_days: number | null;
   subject_ids: number[];
@@ -63,6 +64,9 @@ export interface Subject {
   always_double: boolean;
   blocked_slots: BlockedSlot[] | null;
   limit_last_periods: boolean;
+  is_hidden: boolean;
+  link_group: string | null;
+  link_group_max_per_day: number | null;
 }
 
 export interface PinnedSlot {
@@ -88,6 +92,7 @@ export interface SubjectRequirement {
   consecutive_mode: string | null; // "hard" | "soft" | null
   morning_priority: number | null;
   allow_overlap: boolean;
+  is_hidden: boolean;
 }
 
 // ─── Grouping ────────────────────────────────────────────
@@ -175,7 +180,9 @@ export type RuleType =
   | "SHORT_DAYS_FLEXIBLE"
   | "COMPACT_SCHOOL_DAY"
   | "HOMEROOM_EARLY"
-  | "CLASS_END_TIME";
+  | "CLASS_END_TIME"
+  | "TEACHER_DAY_END_LIMIT"
+  | "TEACHER_PREFERRED_FREE_DAY";
 
 export interface Constraint {
   id: number;
@@ -195,7 +202,7 @@ export interface Constraint {
 }
 
 // ─── Meeting ─────────────────────────────────────────────
-export type MeetingType = "HOMEROOM" | "COORDINATORS" | "MANAGEMENT" | "CUSTOM";
+export type MeetingType = "HOMEROOM" | "COORDINATORS" | "MANAGEMENT" | "CUSTOM" | "PLENARY";
 
 export interface Meeting {
   id: number;
@@ -212,6 +219,7 @@ export interface Meeting {
   allow_overlap: boolean;
   require_consecutive: boolean;
   locked_teacher_ids: number[] | null;
+  alternative_slots: PinnedSlot[] | null;
 }
 
 export interface ScheduledMeeting {
@@ -254,12 +262,20 @@ export interface SolutionDetail extends Solution {
   score_breakdown: ScoreBreakdown | null;
 }
 
+export interface LabelBreakdown {
+  label: string;
+  satisfaction: number;
+  penalty: number;
+  max_penalty: number;
+}
+
 export interface SoftScore {
   constraint_id: number;
   name: string;
   weight: number;
   satisfaction: number;
   weighted_score: number;
+  label_breakdown?: LabelBreakdown[];
 }
 
 export interface ScoreBreakdown {

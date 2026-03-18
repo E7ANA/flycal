@@ -23,6 +23,7 @@ class MeetingCreate(BaseModel):
     allow_overlap: bool = False
     require_consecutive: bool = False
     locked_teacher_ids: list[int] | None = None
+    alternative_slots: list[PinnedSlot] | None = None
 
 
 class MeetingUpdate(BaseModel):
@@ -38,6 +39,7 @@ class MeetingUpdate(BaseModel):
     allow_overlap: bool | None = None
     require_consecutive: bool | None = None
     locked_teacher_ids: list[int] | None = None
+    alternative_slots: list[PinnedSlot] | None = None
 
 
 class MeetingRead(BaseModel):
@@ -55,5 +57,6 @@ class MeetingRead(BaseModel):
     allow_overlap: bool = False
     require_consecutive: bool = False
     locked_teacher_ids: list[int] | None = None
+    alternative_slots: list[PinnedSlot] | None = None
 
     model_config = {"from_attributes": True}

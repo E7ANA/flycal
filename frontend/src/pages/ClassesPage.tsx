@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Pencil, Trash2, Calendar } from "lucide-react";
@@ -6,6 +6,9 @@ import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import { fetchGrades, createGrade, updateGrade, deleteGrade } from "@/api/grades";
 import { fetchClasses, createClass, updateClass, deleteClass } from "@/api/classes";
+import { fetchRequirements } from "@/api/subjects";
+import { fetchGroupingClusters } from "@/api/groupings";
+import { computeAllClassHours } from "@/lib/classHours";
 import { Button } from "@/components/common/Button";
 import { DataTable } from "@/components/common/DataTable";
 import { Dialog, DialogHeader, DialogTitle, DialogFooter } from "@/components/common/Dialog";
@@ -119,6 +122,9 @@ function ClassFormDialog({
   const [name, setName] = useState(classGroup?.name ?? "");
   const [gradeId, setGradeId] = useState(classGroup?.grade_id ?? (grades[0]?.id ?? 0));
   const [numStudents, setNumStudents] = useState(classGroup?.num_students ?? 30);
+  const [homeroomDailyRequired, setHomeroomDailyRequired] = useState(
+    classGroup?.homeroom_daily_required ?? false,
+  );
 
   const createMut = useMutation({
     mutationFn: () =>
@@ -127,6 +133,7 @@ function ClassFormDialog({
         name,
         grade_id: gradeId,
         num_students: numStudents,
+        homeroom_daily_required: homeroomDailyRequired,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["classes", schoolId] });
@@ -142,6 +149,7 @@ function ClassFormDialog({
         name,
         grade_id: gradeId,
         num_students: numStudents,
+        homeroom_daily_required: homeroomDailyRequired,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["classes", schoolId] });
@@ -201,6 +209,20 @@ function ClassFormDialog({
             onChange={(e) => setNumStudents(Number(e.target.value))}
           />
         </div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={homeroomDailyRequired}
+            onChange={(e) => setHomeroomDailyRequired(e.target.checked)}
+            className="rounded border-border"
+          />
+          <span className="text-sm">מחנכת חייבת לפגוש כיתה כל יום</span>
+        </label>
+        <p className="text-xs text-muted-foreground -mt-2">
+          כשמסומן — המחנכת חייבת ללמד בכיתה בכל יום שהיא בבית הספר (אילוץ קשיח).
+          כשלא מסומן — מועדף אך לא מחייב.
+        </p>
+
         <DialogFooter>
           <Button type="submit" disabled={loading}>
             {loading ? "שומר..." : classGroup ? "עדכן" : "צור"}
@@ -237,6 +259,31 @@ export default function ClassesPage() {
     queryKey: ["classes", schoolId],
     queryFn: () => fetchClasses(schoolId!),
     enabled: !!schoolId,
+  });
+
+  const { data: allRequirements = [] } = useQuery({
+    queryKey: ["requirements", schoolId, true],
+    queryFn: () => fetchRequirements(schoolId!, true),
+    enabled: !!schoolId,
+  });
+
+  const { data: clusters = [] } = useQuery({
+    queryKey: ["grouping-clusters", schoolId],
+    queryFn: () => fetchGroupingClusters(schoolId!),
+    enabled: !!schoolId,
+  });
+
+  const classHoursSummary = useMemo(
+    () => computeAllClassHours(allRequirements, clusters),
+    [allRequirements, clusters],
+  );
+
+  const toggleHomeroomMut = useMutation({
+    mutationFn: ({ id, value }: { id: number; value: boolean }) =>
+      updateClass(id, { homeroom_daily_required: value }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["classes", schoolId] });
+    },
   });
 
   const deleteMut = useMutation({
@@ -354,6 +401,59 @@ export default function ClassesPage() {
               accessor: (c) => gradeMap[c.grade_id] ?? "—",
             },
             { header: "תלמידים", accessor: "num_students" },
+            {
+              header: "שעות רגילות",
+              accessor: (c) => {
+                const s = classHoursSummary[c.id];
+                return s?.regular || "—";
+              },
+            },
+            {
+              header: "שעות הקבצות",
+              accessor: (c) => {
+                const s = classHoursSummary[c.id];
+                return s?.grouped || "—";
+              },
+            },
+            {
+              header: "שעות משותפים",
+              accessor: (c) => {
+                const s = classHoursSummary[c.id];
+                return s?.shared || "—";
+              },
+            },
+            {
+              header: "סה״כ שעות",
+              accessor: (c) => {
+                const s = classHoursSummary[c.id];
+                return s?.total ? (
+                  <Badge variant="secondary" className="font-bold">{s.total}</Badge>
+                ) : "—";
+              },
+            },
+            {
+              header: "מחנכת יומית",
+              accessor: (c) => (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleHomeroomMut.mutate({
+                      id: c.id,
+                      value: !c.homeroom_daily_required,
+                    });
+                  }}
+                  className="cursor-pointer"
+                  title="לחץ להחלפה בין חובה/מועדף"
+                >
+                  {c.homeroom_daily_required ? (
+                    <Badge variant="default" className="text-xs">חובה</Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-xs">מועדף</Badge>
+                  )}
+                </button>
+              ),
+            },
             {
               header: "פעולות",
               accessor: (c) => (

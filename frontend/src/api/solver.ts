@@ -37,6 +37,10 @@ export async function runSolver(req: SolveRequest): Promise<SolveResponse> {
   return data;
 }
 
+export async function stopSolver(jobId: string): Promise<void> {
+  await api.post(`/solve/${jobId}/stop`);
+}
+
 export async function fetchSolutions(schoolId: number): Promise<Solution[]> {
   const { data } = await api.get<Solution[]>("/solutions", {
     params: { school_id: schoolId },
@@ -230,6 +234,70 @@ export async function fetchMeetingAbsences(
   const { data } = await api.get<MeetingAbsence[]>("/meeting-absences", {
     params: { school_id: schoolId },
   });
+  return data;
+}
+
+// ── Async solve with polling ──────────────────────────────────────────
+
+export async function startSolveAsync(
+  req: SolveRequest,
+): Promise<{ job_id: string }> {
+  const { data } = await api.post<{ job_id: string }>("/solve-async", req);
+  return data;
+}
+
+export interface SolveProgressData {
+  step: string;
+  step_label: string;
+  step_number: number;
+  total_steps: number;
+  percent: number;
+  solutions_found: number;
+  elapsed: number;
+  done: boolean;
+  result?: SolveResponse;
+}
+
+export async function pollSolveProgress(
+  jobId: string,
+): Promise<SolveProgressData> {
+  const { data } = await api.get<SolveProgressData>(`/solve/${jobId}/progress`);
+  return data;
+}
+
+// ── Plenary attendance ─────────────────────────────────────────────────
+
+export interface PlenaryTeacherInfo {
+  id: number;
+  name: string;
+}
+
+export interface PlenaryTradeoff {
+  locked_teacher: PlenaryTeacherInfo;
+  potential_day: string;
+  potential_day_label: string;
+  gained_teachers: PlenaryTeacherInfo[];
+  gained_count: number;
+}
+
+export interface PlenaryAttendance {
+  meeting_id: number;
+  meeting_name: string;
+  plenary_days: string[];
+  mandatory_teachers: PlenaryTeacherInfo[];
+  preferred_attending: PlenaryTeacherInfo[];
+  preferred_absent: PlenaryTeacherInfo[];
+  total_teachers: number;
+  attending_count: number;
+  tradeoffs: PlenaryTradeoff[];
+}
+
+export async function fetchPlenaryAttendance(
+  solutionId: number,
+): Promise<PlenaryAttendance[]> {
+  const { data } = await api.get<PlenaryAttendance[]>(
+    `/solutions/${solutionId}/plenary-attendance`,
+  );
   return data;
 }
 

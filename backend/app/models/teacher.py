@@ -37,6 +37,8 @@ class Teacher(Base):
 
     # Blocked timeslots: [{"day": "SUNDAY", "period": 3}, ...]
     blocked_slots: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
+    # External ID from Shahaf system (for roundtrip export)
+    shahaf_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     subjects: Mapped[list["Subject"]] = relationship(secondary=teacher_subjects)
     homeroom_class: Mapped["ClassGroup | None"] = relationship()

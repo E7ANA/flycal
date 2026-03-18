@@ -9,7 +9,7 @@ interface PinnedSlot {
   period: number;
 }
 
-type GridMode = "pin" | "block";
+type GridMode = "pin" | "block" | "alternative";
 
 interface PinGridProps {
   reqId: number;
@@ -19,6 +19,10 @@ interface PinGridProps {
   /** Blocked slots — timeslots where this item CANNOT be scheduled */
   blockedSlots?: PinnedSlot[];
   onBlockedChange?: (slots: PinnedSlot[]) => void;
+  /** Alternative slots — solver picks primary OR alternative (PLENARY) */
+  alternativeSlots?: PinnedSlot[];
+  onAlternativeChange?: (slots: PinnedSlot[]) => void;
+  maxAlternative?: number;
   maxPeriod?: number;
   /** Custom fetch function for slot availability (defaults to requirement-based) */
   fetchSlots?: (id: number) => Promise<SlotStatus[]>;
@@ -33,6 +37,9 @@ export function PinGrid({
   onChange,
   blockedSlots = [],
   onBlockedChange,
+  alternativeSlots = [],
+  onAlternativeChange,
+  maxAlternative,
   maxPeriod = 8,
   fetchSlots,
   queryKeyPrefix = "available-slots",
@@ -56,11 +63,13 @@ export function PinGrid({
   const isBlocked = (day: string, period: number) =>
     blockedSlots.some((p) => p.day === day && p.period === period);
 
+  const isAlternative = (day: string, period: number) =>
+    alternativeSlots.some((p) => p.day === day && p.period === period);
+
   const togglePin = (day: string, period: number) => {
     const status = statusMap.get(`${day}_${period}`);
     if (status && status !== "available") return;
-    // Can't pin a blocked slot
-    if (isBlocked(day, period)) return;
+    if (isBlocked(day, period) || isAlternative(day, period)) return;
 
     if (isPinned(day, period)) {
       onChange(pinnedSlots.filter((p) => !(p.day === day && p.period === period)));
@@ -71,8 +80,7 @@ export function PinGrid({
 
   const toggleBlock = (day: string, period: number) => {
     if (!onBlockedChange) return;
-    // Can't block a pinned slot
-    if (isPinned(day, period)) return;
+    if (isPinned(day, period) || isAlternative(day, period)) return;
 
     if (isBlocked(day, period)) {
       onBlockedChange(blockedSlots.filter((p) => !(p.day === day && p.period === period)));
@@ -81,20 +89,39 @@ export function PinGrid({
     }
   };
 
+  const toggleAlternative = (day: string, period: number) => {
+    if (!onAlternativeChange) return;
+    if (isPinned(day, period) || isBlocked(day, period)) return;
+    const status = statusMap.get(`${day}_${period}`);
+    if (status && status !== "available") return;
+
+    if (isAlternative(day, period)) {
+      onAlternativeChange(alternativeSlots.filter((p) => !(p.day === day && p.period === period)));
+    } else {
+      const maxAlt = maxAlternative ?? maxPins;
+      if (alternativeSlots.length < maxAlt) {
+        onAlternativeChange([...alternativeSlots, { day, period }]);
+      }
+    }
+  };
+
   const handleClick = (day: string, period: number) => {
     if (mode === "pin") {
       togglePin(day, period);
-    } else {
+    } else if (mode === "block") {
       toggleBlock(day, period);
+    } else {
+      toggleAlternative(day, period);
     }
   };
 
   const periods = Array.from({ length: maxPeriod }, (_, i) => i + 1);
   const hasBlockMode = !!onBlockedChange;
+  const hasAlternativeMode = !!onAlternativeChange;
 
   return (
     <div className="space-y-2">
-      {hasBlockMode && (
+      {(hasBlockMode || hasAlternativeMode) && (
         <div className="flex gap-1 rounded-md border p-0.5 w-fit">
           <button
             type="button"
@@ -108,31 +135,55 @@ export function PinGrid({
           >
             נעילה
           </button>
-          <button
-            type="button"
-            onClick={() => setMode("block")}
-            className={cn(
-              "px-3 py-1 rounded text-xs font-medium transition-colors",
-              mode === "block"
-                ? "bg-red-500 text-white"
-                : "text-muted-foreground hover:bg-muted",
-            )}
-          >
-            חסימה
-          </button>
+          {hasAlternativeMode && (
+            <button
+              type="button"
+              onClick={() => setMode("alternative")}
+              className={cn(
+                "px-3 py-1 rounded text-xs font-medium transition-colors",
+                mode === "alternative"
+                  ? "bg-amber-400 text-white"
+                  : "text-muted-foreground hover:bg-muted",
+              )}
+            >
+              חלופי
+            </button>
+          )}
+          {hasBlockMode && (
+            <button
+              type="button"
+              onClick={() => setMode("block")}
+              className={cn(
+                "px-3 py-1 rounded text-xs font-medium transition-colors",
+                mode === "block"
+                  ? "bg-red-500 text-white"
+                  : "text-muted-foreground hover:bg-muted",
+              )}
+            >
+              חסימה
+            </button>
+          )}
         </div>
       )}
       <div className="flex items-center justify-between text-sm">
         <span className="text-muted-foreground">
           {mode === "pin"
             ? `נעילות: ${pinnedSlots.length}/${maxPins}`
-            : `חסימות: ${blockedSlots.length}`}
+            : mode === "alternative"
+              ? `חלופי: ${alternativeSlots.length}/${maxAlternative ?? maxPins}`
+              : `חסימות: ${blockedSlots.length}`}
         </span>
         <div className="flex gap-3 text-xs">
           <span className="flex items-center gap-1">
             <span className="inline-block h-3 w-3 rounded bg-blue-500" />
             נעול
           </span>
+          {hasAlternativeMode && (
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-3 w-3 rounded bg-amber-400" />
+              חלופי
+            </span>
+          )}
           <span className="flex items-center gap-1">
             <span className="inline-block h-3 w-3 rounded bg-red-500" />
             חסום
@@ -172,15 +223,17 @@ export function PinGrid({
                   const status = statusMap.get(`${day}_${period}`) ?? "available";
                   const pinned = isPinned(day, period);
                   const blocked = isBlocked(day, period);
+                  const alt = isAlternative(day, period);
                   const externalBlock = status !== "available";
                   const atMax = pinnedSlots.length >= maxPins && !pinned;
+                  const atMaxAlt = alternativeSlots.length >= (maxAlternative ?? maxPins) && !alt;
 
-                  // In pin mode: can't click externally blocked or user-blocked slots
-                  // In block mode: can't click pinned or externally blocked slots
                   const disabled =
                     mode === "pin"
-                      ? externalBlock || blocked || atMax
-                      : pinned || externalBlock;
+                      ? externalBlock || blocked || alt || atMax
+                      : mode === "alternative"
+                        ? externalBlock || pinned || blocked || atMaxAlt
+                        : pinned || alt || externalBlock;
 
                   return (
                     <td key={day} className="px-1 py-0.5 text-center">
@@ -191,41 +244,53 @@ export function PinGrid({
                         className={cn(
                           "h-6 w-full rounded transition-colors",
                           pinned && "bg-blue-500 text-white",
-                          blocked && !pinned && "bg-red-500 text-white",
+                          alt && !pinned && "bg-amber-400 text-white",
+                          blocked && !pinned && !alt && "bg-red-500 text-white",
                           !pinned &&
                             !blocked &&
+                            !alt &&
                             status === "available" &&
                             !disabled &&
                             "bg-green-100 border border-green-300 hover:bg-green-200 cursor-pointer",
                           !pinned &&
                             !blocked &&
+                            !alt &&
                             status === "available" &&
                             disabled &&
                             "bg-gray-100 border border-gray-200 cursor-not-allowed",
                           !pinned &&
                             !blocked &&
+                            !alt &&
                             externalBlock &&
                             "bg-red-100 border border-red-300 cursor-not-allowed",
                         )}
                         title={
                           pinned
                             ? "נעול — לחץ להסרה"
-                            : blocked
-                              ? "חסום — לחץ להסרה"
-                              : externalBlock
-                                ? status === "teacher_blocked"
-                                  ? "המורה חסום"
-                                  : status === "teacher_conflict"
-                                    ? "התנגשות מורה"
-                                    : "התנגשות כיתה"
-                                : disabled
-                                  ? "מקסימום נעילות"
-                                  : mode === "pin"
-                                    ? "לחץ לנעילה"
-                                    : "לחץ לחסימה"
+                            : alt
+                              ? "חלופי — לחץ להסרה"
+                              : blocked
+                                ? "חסום — לחץ להסרה"
+                                : externalBlock
+                                  ? status === "teacher_blocked"
+                                    ? "המורה חסום"
+                                    : status === "teacher_conflict"
+                                      ? "התנגשות מורה"
+                                      : "התנגשות כיתה"
+                                  : disabled
+                                    ? mode === "pin"
+                                      ? "מקסימום נעילות"
+                                      : mode === "alternative"
+                                        ? "מקסימום חלופי"
+                                        : ""
+                                    : mode === "pin"
+                                      ? "לחץ לנעילה"
+                                      : mode === "alternative"
+                                        ? "לחץ לסימון חלופי"
+                                        : "לחץ לחסימה"
                         }
                       >
-                        {blocked && !pinned && "✕"}
+                        {blocked && !pinned && !alt && "✕"}
                       </button>
                     </td>
                   );
