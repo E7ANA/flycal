@@ -302,10 +302,12 @@ def _add_soft_penalty(
     constraint: Constraint,
     violation_var: cp_model.IntVar,
     label: str | None = None,
+    weight_override: int | None = None,
 ) -> None:
     """Add a weighted penalty variable for soft constraint violations."""
     idx = len(variables.penalties)
-    variables.penalties.append((violation_var, constraint.weight, constraint.id))
+    w = weight_override if weight_override is not None else constraint.weight
+    variables.penalties.append((violation_var, w, constraint.id))
     if label:
         variables.penalty_labels[idx] = label
 
@@ -1775,22 +1777,14 @@ def _compile_homeroom_early(
     model: cp_model.CpModel, data: SolverData,
     variables: SolverVariables, constraint: Constraint,
 ) -> None:
-    """Homeroom teacher ("מחנכת") must teach on Sunday with strong preference
-    for opening the morning (period 1).
+    """Homeroom teacher ("מחנכת") should open the morning on Sunday (period 1).
 
-    Hard constraints:
-    - Homeroom teacher MUST teach her homeroom class on SUNDAY (at least 1 lesson).
-    - Homeroom teacher MUST open the morning (period 1) on SUNDAY specifically.
+    All SOFT — no hard constraints.  Lightweight: only creates variables for
+    period 1 on Sunday and period 1 on other days (no per-period penalties).
 
-    Soft bonuses/penalties:
-    - Period 1 on SUNDAY: very high bonus (weight × 8)
-    - Period 2 on SUNDAY: high bonus (weight × 4)
-    - Period 1 on other days: moderate bonus (weight × 3)
-    - Period 2 on other days: small bonus (weight × 1)
-    - Period 3+: penalty proportional to lateness (period - 2)
-
-    Bonuses are implemented as negative-weight penalties so the minimizing
-    objective treats them as rewards.
+    Bonuses (negative-weight penalties = rewards):
+    - Period 1 on SUNDAY: weight × 4
+    - Period 1 on other days: weight × 2
     """
     if not data.homeroom_map:
         return
@@ -1798,61 +1792,22 @@ def _compile_homeroom_early(
     w = constraint.weight
 
     for teacher_id, class_id in data.homeroom_map.items():
-        # Collect period-1 Sunday vars for the HARD constraint
-        period1_sunday_vars: list = []
-        # Collect all Sunday vars to enforce teaching on Sunday
-        sunday_vars: list = []
-
         for key, var in variables.x.items():
-            c_id, s_id, t_id, day, period = key
-            if t_id != teacher_id or c_id != class_id:
+            c_id, _s, t_id, day, period = key
+            if t_id != teacher_id or c_id != class_id or period != 1:
                 continue
 
-            prefix = f"hr_early_{constraint.id}_t{teacher_id}_c{class_id}_{day}_p{period}"
+            # Bonus for teaching homeroom class at period 1
             is_sunday = day == "SUNDAY"
-
-            if is_sunday:
-                sunday_vars.append(var)
-
-            if period == 1 and is_sunday:
-                period1_sunday_vars.append(var)
-
-            if period == 1:
-                # Bonus for teaching homeroom class at period 1
-                bonus_multiplier = 8 if is_sunday else 3
-                bonus_var = model.new_int_var(
-                    0, 1, f"{prefix}_bonus",
-                )
-                model.add(bonus_var == var)
-                bonus_weight = w * bonus_multiplier
-                variables.penalties.append((bonus_var, -bonus_weight, constraint.id))
-
-            elif period == 2:
-                # Smaller bonus for period 2
-                bonus_multiplier = 4 if is_sunday else 1
-                bonus_var = model.new_int_var(
-                    0, 1, f"{prefix}_bonus",
-                )
-                model.add(bonus_var == var)
-                bonus_weight = w * bonus_multiplier
-                variables.penalties.append((bonus_var, -bonus_weight, constraint.id))
-
-            else:
-                # Period 3+: penalty proportional to how late in the day
-                lateness = period - 2
-                penalty_var = model.new_int_var(
-                    0, lateness, f"{prefix}_penalty",
-                )
-                model.add(penalty_var == lateness * var)
-                _add_soft_penalty(model, variables, constraint, penalty_var)
-
-        # HARD: homeroom teacher must teach her class on Sunday
-        if sunday_vars:
-            model.add(sum(sunday_vars) >= 1)
-
-        # HARD: homeroom teacher must open morning (period 1) on Sunday
-        if period1_sunday_vars:
-            model.add(sum(period1_sunday_vars) >= 1)
+            bonus_multiplier = 4 if is_sunday else 2
+            bonus_var = model.new_int_var(
+                0, 1,
+                f"hr_early_{constraint.id}_t{teacher_id}_{day}_bonus",
+            )
+            model.add(bonus_var == var)
+            variables.penalties.append(
+                (bonus_var, -(w * bonus_multiplier), constraint.id)
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1864,32 +1819,45 @@ def _compile_class_end_time(
     variables: SolverVariables, constraint: Constraint,
 ) -> None:
     """CLASS_END_TIME: on specified days, the last lesson for each class must
-    fall within [min_period, max_period].
+    end at one of the allowed periods.
 
     Parameters:
         days: list[str] — which days (e.g. ["MONDAY", "WEDNESDAY"])
-        min_period: int — earliest allowed end period
-        max_period: int — latest allowed end period
+        allowed_periods: list[int] — specific periods where the day can end (e.g. [6, 8])
+        (legacy) min_period/max_period — converted to allowed_periods range
     """
     target_days = constraint.parameters.get("days", [])
-    min_period = constraint.parameters.get("min_period")
-    max_period = constraint.parameters.get("max_period")
-    if not target_days or min_period is None or max_period is None:
+    if not target_days:
         return
+
+    # Support both new format (allowed_periods) and legacy (min_period/max_period)
+    allowed_periods = constraint.parameters.get("allowed_periods")
+    if not allowed_periods:
+        min_period = constraint.parameters.get("min_period")
+        max_period = constraint.parameters.get("max_period")
+        if min_period is None or max_period is None:
+            return
+        allowed_periods = list(range(min_period, max_period + 1))
+
+    max_period = max(allowed_periods)
     is_hard = constraint.type == ConstraintType.HARD
 
+    # Determine target classes
+    target_class_ids = constraint.parameters.get("target_class_ids", [])
     if constraint.category == "CLASS" and constraint.target_id:
         targets = [constraint.target_id]
+    elif target_class_ids:
+        targets = [cid for cid in target_class_ids if any(cg.id == cid for cg in data.class_groups)]
     else:
         targets = [cg.id for cg in data.class_groups]
 
     for cg_id in targets:
         slot_vars = _vars_for_class(variables, data, cg_id)
         for day in data.days:
-            if day not in target_days:
+            if str(day) not in target_days and day not in target_days:
                 continue
 
-            # 1) No lessons after max_period
+            # 1) No lessons after max allowed period
             late_vars: list[cp_model.IntVar] = []
             for (d, p), vlist in slot_vars.items():
                 if d == day and p > max_period:
@@ -1907,10 +1875,10 @@ def _compile_class_end_time(
                     _add_soft_penalty(model, variables, constraint, cnt,
                                       label=_class_label(data, cg_id))
 
-            # 2) At least one lesson in [min_period, max_period]
+            # 2) At least one lesson in one of the allowed periods
             target_vars: list[cp_model.IntVar] = []
             for (d, p), vlist in slot_vars.items():
-                if d == day and min_period <= p <= max_period:
+                if d == day and p in allowed_periods:
                     target_vars.extend(vlist)
             if target_vars:
                 if is_hard:
@@ -1927,6 +1895,7 @@ def _compile_class_end_time(
                     model.add(missing == 1 - has_end)
                     _add_soft_penalty(model, variables, constraint, missing,
                                       label=_class_label(data, cg_id))
+
 
 
 # ---------------------------------------------------------------------------

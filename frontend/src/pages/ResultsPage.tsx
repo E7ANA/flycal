@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, BarChart3, Eye, Download, AlertTriangle, Users, Check, X } from "lucide-react";
+import { Trash2, BarChart3, Eye, Download, AlertTriangle, Users, Check, X, ClipboardList, ChevronDown, ChevronUp } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import { useAuthStore } from "@/stores/authStore";
@@ -16,7 +16,9 @@ import {
   fetchTeacherPresence,
   fetchMeetingAbsences,
   fetchPlenaryAttendance,
+  fetchSolutionSummary,
 } from "@/api/solver";
+import type { HomeroomTeacherSummary, BrainScoreItem } from "@/api/solver";
 import { fetchMeetings } from "@/api/meetings";
 import { fetchClasses } from "@/api/classes";
 import { fetchTeachers } from "@/api/teachers";
@@ -73,6 +75,12 @@ export default function ResultsPage() {
   const { data: scoreBreakdown } = useQuery({
     queryKey: ["score-breakdown", selectedSolutionId],
     queryFn: () => fetchScoreBreakdown(selectedSolutionId!),
+    enabled: selectedSolutionId !== null,
+  });
+
+  const { data: solutionSummary } = useQuery({
+    queryKey: ["solution-summary", selectedSolutionId],
+    queryFn: () => fetchSolutionSummary(selectedSolutionId!),
     enabled: selectedSolutionId !== null,
   });
 
@@ -433,6 +441,9 @@ export default function ResultsPage() {
             </Card>
           )}
 
+          {/* Solution Summary */}
+          {solutionSummary && <SolutionSummaryCard summary={solutionSummary} />}
+
           {/* Violations */}
           {scoreBreakdown?.violations?.length > 0 && (
             <Card>
@@ -732,5 +743,187 @@ export default function ResultsPage() {
         loading={deleteMut.isPending}
       />
     </div>
+  );
+}
+
+
+/* ─── Solution Summary Card ─────────────────────────────────────────── */
+
+function ScoreBar({ value, max, className = "" }: { value: number; max: number; className?: string }) {
+  const pct = max > 0 ? (value / max) * 100 : 0;
+  const color = pct >= 80 ? "#22c55e" : pct >= 50 ? "#eab308" : "#ef4444";
+  return (
+    <div className={`flex items-center gap-2 ${className}`}>
+      <div className="h-2 flex-1 bg-muted rounded-full overflow-hidden">
+        <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
+      </div>
+      <span className="text-xs text-muted-foreground w-10 text-left">{Math.round(pct)}%</span>
+    </div>
+  );
+}
+
+function SolutionSummaryCard({ summary }: { summary: import("@/api/solver").SolutionSummary }) {
+  const [expandedHomeroom, setExpandedHomeroom] = useState(false);
+  const [expandedBrain, setExpandedBrain] = useState(false);
+
+  const { homeroom_summary, brain_hard, brain_soft, user_constraints } = summary;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ClipboardList className="h-5 w-5" />
+          סיכום פתרון
+          <Badge variant="outline" className="mr-auto">{summary.total_score}/100</Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {/* ── Homeroom Summary ── */}
+        <div>
+          <button
+            className="flex items-center gap-2 w-full text-right font-medium text-sm mb-2 cursor-pointer"
+            onClick={() => setExpandedHomeroom(!expandedHomeroom)}
+          >
+            {expandedHomeroom ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            מחנכות — פתיחת בוקר ונוכחות ({homeroom_summary.length})
+          </button>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b text-muted-foreground">
+                  <th className="text-right py-1.5 px-2 font-medium">מחנכת</th>
+                  <th className="text-right py-1.5 px-2 font-medium">כיתה</th>
+                  <th className="text-center py-1.5 px-2 font-medium">נוכחות</th>
+                  <th className="text-center py-1.5 px-2 font-medium">פתיחת בוקר</th>
+                  <th className="text-right py-1.5 px-2 font-medium">ימים חסרים</th>
+                  {expandedHomeroom && <th className="text-right py-1.5 px-2 font-medium">פתיחה בימים</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {homeroom_summary.map((h) => (
+                  <tr key={h.teacher_id} className="border-b border-muted last:border-0 hover:bg-muted/50">
+                    <td className="py-1.5 px-2">{h.teacher_name}</td>
+                    <td className="py-1.5 px-2">{h.class_name}</td>
+                    <td className="text-center py-1.5 px-2">
+                      <Badge variant={h.present_days >= 4 ? "success" : h.present_days >= 3 ? "warning" : "destructive"}>
+                        {h.present_days}/{h.total_days}
+                      </Badge>
+                    </td>
+                    <td className="text-center py-1.5 px-2">
+                      <Badge variant={h.opens_morning_count >= 3 ? "success" : h.opens_morning_count >= 1 ? "warning" : "destructive"}>
+                        {h.opens_morning_count}/{h.total_days}
+                      </Badge>
+                    </td>
+                    <td className="py-1.5 px-2 text-muted-foreground text-xs">
+                      {h.absent_days.length > 0 ? h.absent_days.join(", ") : "—"}
+                    </td>
+                    {expandedHomeroom && (
+                      <td className="py-1.5 px-2 text-xs">
+                        {h.opens_morning_days.length > 0 ? h.opens_morning_days.join(", ") : "—"}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {expandedHomeroom && homeroom_summary.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {homeroom_summary.map((h) => (
+                <div key={h.teacher_id} className="bg-muted/30 rounded p-2 text-xs">
+                  <span className="font-medium">{h.teacher_name} — {h.class_name}:</span>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {h.day_details.map((dd) => (
+                      <span
+                        key={dd.day}
+                        className={`inline-block px-1.5 py-0.5 rounded ${dd.opens ? "bg-emerald-100 text-emerald-800" : "bg-muted text-muted-foreground"}`}
+                      >
+                        {dd.day_label}: שעות {dd.periods.join(",")}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ── Brain Rules ── */}
+        <div>
+          <button
+            className="flex items-center gap-2 w-full text-right font-medium text-sm mb-2 cursor-pointer"
+            onClick={() => setExpandedBrain(!expandedBrain)}
+          >
+            {expandedBrain ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            כללי מוח ({brain_hard.total} חובה, {brain_soft.items.length} רכים)
+          </button>
+
+          {/* Hard brain rules summary */}
+          <div className="flex items-center gap-2 mb-2 text-sm">
+            <Badge variant={brain_hard.satisfied === brain_hard.total ? "success" : "destructive"}>
+              {brain_hard.satisfied}/{brain_hard.total} חובה מסופקים
+            </Badge>
+            <span className="text-muted-foreground">|</span>
+            <span className="text-muted-foreground text-xs">
+              ניקוד רך: {brain_soft.total_scored.toFixed(0)}/{brain_soft.total_weight.toFixed(0)}
+            </span>
+          </div>
+
+          {/* Soft brain rules */}
+          <div className="space-y-1.5">
+            {brain_soft.items
+              .filter((b) => expandedBrain || b.satisfaction < 1)
+              .map((b) => (
+                <div key={b.constraint_id} className="flex items-center gap-2 text-sm">
+                  <span className="flex-1 truncate">{b.name}</span>
+                  <ScoreBar value={b.weighted_score} max={b.weight} className="w-28" />
+                  <span className="text-xs text-muted-foreground w-16 text-left">
+                    {b.weighted_score.toFixed(0)}/{b.weight}
+                  </span>
+                </div>
+              ))}
+            {!expandedBrain && brain_soft.items.filter((b) => b.satisfaction < 1).length === 0 && (
+              <p className="text-xs text-muted-foreground">כל האילוצים הרכים מסופקים במלואם</p>
+            )}
+          </div>
+
+          {expandedBrain && brain_hard.items.length > 0 && (
+            <div className="mt-3 space-y-1">
+              <p className="text-xs font-medium text-muted-foreground">אילוצי חובה:</p>
+              <div className="flex flex-wrap gap-1">
+                {brain_hard.items.map((b) => (
+                  <Badge
+                    key={b.constraint_id}
+                    variant={b.satisfaction === 1 ? "success" : "destructive"}
+                    className="text-xs"
+                  >
+                    {b.satisfaction === 1 ? <Check className="h-3 w-3 ml-1" /> : <X className="h-3 w-3 ml-1" />}
+                    {b.name}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── User Constraints ── */}
+        {user_constraints.items.length > 0 && (
+          <div>
+            <p className="font-medium text-sm mb-2">אילוצי משתמש</p>
+            <div className="space-y-1.5">
+              {user_constraints.items.map((s) => (
+                <div key={s.constraint_id} className="flex items-center gap-2 text-sm">
+                  <span className="flex-1 truncate">{s.name}</span>
+                  <ScoreBar value={s.weighted_score} max={s.weight} className="w-28" />
+                  <span className="text-xs text-muted-foreground w-16 text-left">
+                    {s.weighted_score.toFixed(0)}/{s.weight}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

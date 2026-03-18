@@ -796,6 +796,144 @@ def get_score_breakdown(solution_id: int, db: Session = Depends(get_db)):
     return solution.score_breakdown or {}
 
 
+@router.get("/solutions/{solution_id}/summary")
+def get_solution_summary(solution_id: int, db: Session = Depends(get_db)):
+    """Detailed solution summary: homeroom breakdown, all scoring items."""
+    from collections import defaultdict
+    from app.models.class_group import ClassGroup, GroupingCluster, cluster_source_classes
+
+    solution = db.get(Solution, solution_id)
+    if not solution:
+        raise HTTPException(status_code=404, detail="פתרון לא נמצא")
+
+    breakdown = solution.score_breakdown or {}
+    school_id = solution.school_id
+
+    # --- Homeroom teachers ---
+    homeroom_teachers = (
+        db.query(Teacher)
+        .filter(Teacher.school_id == school_id, Teacher.homeroom_class_id.isnot(None))
+        .all()
+    )
+    class_map = {
+        cg.id: cg.name
+        for cg in db.query(ClassGroup).filter(ClassGroup.school_id == school_id).all()
+    }
+
+    # Direct lessons
+    direct = (
+        db.query(
+            ScheduledLesson.class_group_id,
+            ScheduledLesson.teacher_id,
+            ScheduledLesson.day,
+            ScheduledLesson.period,
+        )
+        .filter(
+            ScheduledLesson.solution_id == solution_id,
+            ScheduledLesson.class_group_id.isnot(None),
+        )
+        .all()
+    )
+    # Track lessons mapped to source classes
+    track_rows = (
+        db.query(
+            cluster_source_classes.c.class_group_id,
+            Track.teacher_id,
+            ScheduledLesson.day,
+            ScheduledLesson.period,
+        )
+        .join(Track, ScheduledLesson.track_id == Track.id)
+        .join(
+            cluster_source_classes,
+            Track.cluster_id == cluster_source_classes.c.cluster_id,
+        )
+        .filter(
+            ScheduledLesson.solution_id == solution_id,
+            ScheduledLesson.track_id.isnot(None),
+        )
+        .all()
+    )
+
+    # teacher_id -> class_id -> day -> set(periods)
+    tc_map: dict[int, dict[int, dict[str, set[int]]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(set))
+    )
+    for cg_id, t_id, day, period in list(direct) + list(track_rows):
+        if t_id and cg_id:
+            tc_map[t_id][cg_id][day].add(period)
+
+    days_order = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY"]
+    day_heb = {
+        "SUNDAY": "ראשון",
+        "MONDAY": "שני",
+        "TUESDAY": "שלישי",
+        "WEDNESDAY": "רביעי",
+        "THURSDAY": "חמישי",
+    }
+
+    homeroom_summary = []
+    for t in homeroom_teachers:
+        cg_id = t.homeroom_class_id
+        cg_name = class_map.get(cg_id, str(cg_id))
+        days_data = tc_map.get(t.id, {}).get(cg_id, {})
+
+        present_days = [d for d in days_order if d in days_data]
+        opens_morning = [d for d in days_order if d in days_data and 1 in days_data[d]]
+
+        day_details = []
+        for d in days_order:
+            if d in days_data:
+                day_details.append({
+                    "day": d,
+                    "day_label": day_heb[d],
+                    "periods": sorted(days_data[d]),
+                    "opens": 1 in days_data[d],
+                })
+
+        homeroom_summary.append({
+            "teacher_id": t.id,
+            "teacher_name": t.name,
+            "class_id": cg_id,
+            "class_name": cg_name,
+            "present_days": len(present_days),
+            "total_days": len(days_order),
+            "absent_days": [day_heb[d] for d in days_order if d not in days_data],
+            "opens_morning_count": len(opens_morning),
+            "opens_morning_days": [day_heb[d] for d in opens_morning],
+            "day_details": day_details,
+        })
+
+    homeroom_summary.sort(key=lambda x: x["class_name"])
+
+    # --- Brain scores grouped ---
+    brain = breakdown.get("brain_scores", [])
+    brain_hard = [b for b in brain if b.get("is_hard")]
+    brain_soft = [b for b in brain if not b.get("is_hard")]
+    brain_hard_ok = sum(1 for b in brain_hard if b["satisfaction"] == 1.0)
+
+    # --- User constraint scores ---
+    soft = breakdown.get("soft_scores", [])
+
+    return {
+        "solution_id": solution_id,
+        "total_score": breakdown.get("total_score", 0),
+        "homeroom_summary": homeroom_summary,
+        "brain_hard": {
+            "satisfied": brain_hard_ok,
+            "total": len(brain_hard),
+            "items": brain_hard,
+        },
+        "brain_soft": {
+            "items": brain_soft,
+            "total_weight": sum(b.get("weight", 0) for b in brain_soft),
+            "total_scored": sum(b.get("weighted_score", 0) for b in brain_soft),
+        },
+        "user_constraints": {
+            "items": soft,
+        },
+    }
+
+
 class OverlapItem(BaseModel):
     type: str  # "requirement" | "track"
     id: int

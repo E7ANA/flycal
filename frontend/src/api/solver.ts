@@ -96,6 +96,54 @@ export async function fetchScoreBreakdown(
   return data;
 }
 
+export interface HomeroomDayDetail {
+  day: string;
+  day_label: string;
+  periods: number[];
+  opens: boolean;
+}
+
+export interface HomeroomTeacherSummary {
+  teacher_id: number;
+  teacher_name: string;
+  class_id: number;
+  class_name: string;
+  present_days: number;
+  total_days: number;
+  absent_days: string[];
+  opens_morning_count: number;
+  opens_morning_days: string[];
+  day_details: HomeroomDayDetail[];
+}
+
+export interface BrainScoreItem {
+  constraint_id: number;
+  name: string;
+  weight: number;
+  satisfaction: number;
+  weighted_score: number;
+  is_brain?: boolean;
+  is_hard?: boolean;
+}
+
+export interface SolutionSummary {
+  solution_id: number;
+  total_score: number;
+  homeroom_summary: HomeroomTeacherSummary[];
+  brain_hard: { satisfied: number; total: number; items: BrainScoreItem[] };
+  brain_soft: { items: BrainScoreItem[]; total_weight: number; total_scored: number };
+  user_constraints: { items: BrainScoreItem[] };
+}
+
+export async function fetchSolutionSummary(
+  solutionId: number,
+): Promise<SolutionSummary> {
+  const { data } = await api.get<SolutionSummary>(
+    `/solutions/${solutionId}/summary`,
+  );
+  return data;
+}
+
 export async function fetchScheduledMeetings(
   solutionId: number,
 ): Promise<ScheduledMeeting[]> {

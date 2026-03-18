@@ -428,6 +428,10 @@ function GlobalConstraintForm({
     queryKey: ["subjects", schoolId],
     queryFn: () => fetchSubjects(schoolId),
   });
+  const { data: classes = [] } = useQuery({
+    queryKey: ["classes", schoolId],
+    queryFn: () => fetchClasses(schoolId),
+  });
 
   const [ruleType, setRuleType] = useState<RuleType>(
     constraint?.rule_type ?? rules[0].value,
@@ -569,6 +573,7 @@ function GlobalConstraintForm({
           params={params}
           setParam={setParam}
           subjects={subjects}
+          classes={classes}
         />
 
         <DialogFooter>
@@ -591,11 +596,13 @@ function ParameterFields({
   params,
   setParam,
   subjects,
+  classes = [],
 }: {
   ruleType: RuleType;
   params: Record<string, unknown>;
   setParam: (key: string, value: unknown) => void;
   subjects: { id: number; name: string }[];
+  classes?: { id: number; name: string }[];
 }) {
   const daySelect = (key: string, allowAll = false) => (
     <div>
@@ -659,7 +666,10 @@ function ParameterFields({
       );
     case "COMPACT_SCHOOL_DAY":
       return numberInput("min_periods", "מינימום שעות ביום", 1);
-    case "CLASS_END_TIME":
+    case "CLASS_END_TIME": {
+      const selectedClassIds = ((params.target_class_ids as number[]) ?? []);
+      const allClassesSelected = selectedClassIds.length === 0;
+      const allowedPeriods = ((params.allowed_periods as number[]) ?? []);
       return (
         <div className="space-y-2">
           <div>
@@ -683,12 +693,66 @@ function ParameterFields({
               })}
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            {numberInput("min_period", "משעה (מינימום)", 1)}
-            {numberInput("max_period", "עד שעה (מקסימום)", 1)}
+          <div>
+            <Label className="text-xs">שעות סיום אפשריות</Label>
+            <div className="flex flex-wrap gap-1 mt-1">
+              {[1,2,3,4,5,6,7,8].map((p) => {
+                const selected = allowedPeriods.includes(p);
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    className={`px-2.5 py-1 text-xs rounded border cursor-pointer ${selected ? "bg-primary text-white" : "bg-muted"}`}
+                    onClick={() => {
+                      setParam("allowed_periods",
+                        selected
+                          ? allowedPeriods.filter((x: number) => x !== p)
+                          : [...allowedPeriods, p].sort((a, b) => a - b)
+                      );
+                    }}
+                  >
+                    {p}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">בחר את השעות שבהן מותר לסיים את היום</p>
+          </div>
+          <div>
+            <Label className="text-xs">כיתות</Label>
+            <div className="flex flex-wrap gap-1.5 mt-1">
+              <button
+                type="button"
+                className={`px-2 py-1 text-xs rounded border cursor-pointer ${allClassesSelected ? "bg-primary text-white" : "bg-muted"}`}
+                onClick={() => setParam("target_class_ids", [])}
+              >
+                כולן
+              </button>
+              {classes.map((cls) => {
+                const isSelected = selectedClassIds.includes(cls.id);
+                return (
+                  <button
+                    key={cls.id}
+                    type="button"
+                    className={`px-2 py-1 text-xs rounded border cursor-pointer ${isSelected ? "bg-primary text-white" : "bg-muted"}`}
+                    onClick={() => {
+                      setParam("target_class_ids",
+                        isSelected
+                          ? selectedClassIds.filter((id: number) => id !== cls.id)
+                          : [...selectedClassIds, cls.id]
+                      );
+                    }}
+                  >
+                    {cls.name}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">ריק = כל הכיתות</p>
           </div>
         </div>
       );
+    }
     case "NO_GAPS":
     case "NO_CONSECUTIVE_DAYS":
     case "AVOID_LAST_PERIOD":
