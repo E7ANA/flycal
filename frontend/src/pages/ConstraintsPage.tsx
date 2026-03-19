@@ -700,6 +700,7 @@ export default function ConstraintsPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-sm truncate">
+                      <span className="text-xs text-muted-foreground font-mono">#{c.id}</span>{" "}
                       {c.name}
                     </span>
                     <Badge
@@ -819,6 +820,7 @@ export default function ConstraintsPage() {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className="font-medium text-sm truncate">
+                  <span className="text-xs text-muted-foreground font-mono">#{c.id}</span>{" "}
                   {c.name}
                 </span>
                 <Badge

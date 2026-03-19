@@ -861,7 +861,7 @@ def _diagnose_infeasibility(
 
         # Generic fallback
         return (
-            f"האילוץ '{c.name}' (סוג {rt}) סותר את אילוצי המערכת. "
+            f"אילוץ #{c.id} '{c.name}' (סוג {rt}) סותר את אילוצי המערכת. "
             f"נסו לשנות ל-SOFT או לבטל זמנית."
         )
 
@@ -1095,7 +1095,7 @@ def _diagnose_infeasibility(
             c = group[0]
             conflicts.append(InfeasibilityConflict(
                 source="user_constraint",
-                name=c.name,
+                name=f"#{c.id} {c.name}",
                 constraint_id=c.id,
                 rule_type=rule_type,
                 details=_explain_constraint(c),
@@ -1111,7 +1111,7 @@ def _diagnose_infeasibility(
                     individual_culprits.append(c)
                     conflicts.append(InfeasibilityConflict(
                         source="user_constraint",
-                        name=c.name,
+                        name=f"#{c.id} {c.name}",
                         constraint_id=c.id,
                         rule_type=rule_type,
                         details=_explain_constraint(c),
@@ -1119,7 +1119,7 @@ def _diagnose_infeasibility(
 
             # If no individual constraint caused INFEASIBLE, it's a combination
             if not individual_culprits:
-                names = ", ".join(c.name for c in group[:5])
+                names = ", ".join(f"#{c.id} {c.name}" for c in group[:5])
                 if len(group) > 5:
                     names += f" (+{len(group) - 5} נוספים)"
                 conflicts.append(InfeasibilityConflict(
@@ -1162,8 +1162,8 @@ def _diagnose_infeasibility(
                 _compile_one(m, data, v, c)
             status = _quick_solve(m)
             if status == cp_model.INFEASIBLE:
-                names1 = ", ".join(c.name for c in by_rule[rt1][:3])
-                names2 = ", ".join(c.name for c in by_rule[rt2][:3])
+                names1 = ", ".join(f"#{c.id} {c.name}" for c in by_rule[rt1][:3])
+                names2 = ", ".join(f"#{c.id} {c.name}" for c in by_rule[rt2][:3])
                 conflicts.append(InfeasibilityConflict(
                     source="user_constraint",
                     name=f"שילוב בין {rt1} ו-{rt2}",
@@ -1599,7 +1599,36 @@ def solve(
         variables, data, _max_sol,
         job_id=job_id, max_time=_effective_max_time,
     )
+
+    # Monitor thread: checks stop_requested every second and terminates
+    # the solver by reducing its time limit to 0.
+    _stop_monitor_done = threading.Event()
+
+    def _stop_monitor() -> None:
+        while not _stop_monitor_done.is_set():
+            if job_id:
+                progress = get_progress(job_id)
+                if progress and progress.stop_requested and callback.snapshots:
+                    # Force solver to stop by shrinking its time limit
+                    solver.parameters.max_time_in_seconds = 0
+                    break
+                # Update elapsed time for progress even without new solutions
+                elapsed = time.time() - start_time
+                time_pct = min(int(elapsed / _effective_max_time * 100), 99)
+                _set_progress(
+                    job_id,
+                    step="solving", step_number=7,
+                    percent=time_pct,
+                    solutions_found=len(callback.snapshots),
+                    elapsed=round(elapsed, 1),
+                )
+            _stop_monitor_done.wait(1.0)
+
+    monitor = threading.Thread(target=_stop_monitor, daemon=True)
+    monitor.start()
+
     status = solver.solve(model, callback)
+    _stop_monitor_done.set()
 
     solve_time = time.time() - start_time
 
@@ -1647,7 +1676,7 @@ def solve(
                     # Global default — expand to all targets
                     _expand_global_defaults(mt, data, vt, specific, [c])
                 if _quick(mt, 5) == cp_model.INFEASIBLE:
-                    detail = f"אילוץ: {c.name} ({c.rule_type.value})"
+                    detail = f"אילוץ #{c.id}: {c.name} ({c.rule_type.value})"
                     # If global, drill down to find which target breaks
                     if c.target_id is None:
                         subj_names = {s.id: s.name for s in data.all_subjects}

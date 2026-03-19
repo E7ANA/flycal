@@ -63,7 +63,7 @@ export function DataTable<T>({
           />
         </div>
       )}
-      <div className="rounded-md border overflow-hidden">
+      <div className="rounded-md border overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-muted/50">
             <tr>

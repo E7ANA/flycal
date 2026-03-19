@@ -1571,7 +1571,8 @@ def _apply_max_days_by_frontal(
        - < 12 frontal hours AND total estimated employment < 20 → max 2 days
     3. MIN_FREE_DAYS always prevails (caps max_days further)
 
-    Only counts days with actual teaching (lessons/tracks), NOT meetings.
+    Counts days with teaching (lessons/tracks) AND mandatory meeting attendance.
+    A teacher attending a mandatory plenary on Sunday counts Sunday as a work day.
     """
     LOW_FRONTAL_THRESHOLD = 12
     LOW_EMPLOYMENT_THRESHOLD = 20
@@ -1579,7 +1580,7 @@ def _apply_max_days_by_frontal(
 
     brain_id = _next_brain_id() - 1
 
-    # Build teacher vars by day (lessons + tracks only, no meetings)
+    # Build teacher vars by day (lessons + tracks + mandatory meetings)
     teacher_day_vars: dict[int, dict[str, list[cp_model.IntVar]]] = defaultdict(
         lambda: defaultdict(list)
     )
@@ -1595,6 +1596,30 @@ def _apply_max_days_by_frontal(
                     tk_id, day, _p = key
                     if tk_id == track.id:
                         teacher_day_vars[track.teacher_id][day].append(var)
+
+    # Include pinned mandatory meeting days — a locked teacher attending a
+    # mandatory meeting pinned to a specific day counts that day as a work day.
+    # Only add for pinned days (not all possible days) to keep the model lean.
+    for meeting in data.meetings:
+        is_mandatory = getattr(meeting, "is_mandatory_attendance", True)
+        if not is_mandatory or not meeting.teachers:
+            continue
+        locked_ids = set(getattr(meeting, "locked_teacher_ids", None) or [])
+        pinned = getattr(meeting, "pinned_slots", None) or []
+        pinned_days: set[str] = set()
+        for pin in pinned:
+            d = pin.get("day") if isinstance(pin, dict) else getattr(pin, "day", None)
+            if d is not None:
+                pinned_days.add(d)
+        if not pinned_days:
+            continue
+        for teacher in meeting.teachers:
+            if teacher.id not in locked_ids:
+                continue
+            for key, var in variables.x_meeting.items():
+                m_id, day, _p = key
+                if m_id == meeting.id and day in pinned_days:
+                    teacher_day_vars[teacher.id][day].append(var)
 
     breakdown: list[dict] = []
 

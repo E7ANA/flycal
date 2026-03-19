@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, BarChart3, Eye, Download, AlertTriangle, Users, Check, X, ClipboardList, ChevronDown, ChevronUp } from "lucide-react";
+import { Trash2, BarChart3, Eye, Download, FileText, AlertTriangle, Users, Check, X, ClipboardList, ChevronDown, ChevronUp } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import { useAuthStore } from "@/stores/authStore";
@@ -258,6 +258,7 @@ export default function ResultsPage() {
               }
             }}
           >
+            <span className="text-xs text-muted-foreground font-mono">#{sol.id}</span>
             <Badge
               variant={
                 sol.status === "OPTIMAL"
@@ -304,6 +305,35 @@ export default function ResultsPage() {
               title="ייצוא Excel"
             >
               <Download className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={(e) => {
+                e.stopPropagation();
+                const token = useAuthStore.getState().token;
+                toast.loading("מייצר PDF...", { id: "pdf-export" });
+                fetch(`/api/solutions/${sol.id}/export/pdf`, {
+                  headers: token ? { Authorization: `Bearer ${token}` } : {},
+                })
+                  .then((res) => {
+                    if (!res.ok) throw new Error("Export failed");
+                    return res.blob();
+                  })
+                  .then((blob) => {
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `timetable_solution_${sol.id}.pdf`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    toast.success("PDF הורד בהצלחה", { id: "pdf-export" });
+                  })
+                  .catch(() => toast.error("שגיאה בייצוא PDF", { id: "pdf-export" }));
+              }}
+              title="ייצוא PDF"
+            >
+              <FileText className="h-4 w-4" />
             </Button>
             <Button
               variant="ghost"
@@ -383,11 +413,12 @@ export default function ResultsPage() {
                     {scoreBreakdown.soft_scores.map((s) => (
                       <React.Fragment key={s.constraint_id}>
                       <div
-                        className="flex items-center gap-3"
+                        className="flex items-center gap-3" title={`אילוץ #${s.constraint_id}`}
                       >
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-sm truncate">
+                              <span className="text-xs text-muted-foreground font-mono">#{s.constraint_id}</span>{" "}
                               {s.name}
                             </span>
                             <span className="text-xs text-muted-foreground">
@@ -848,6 +879,89 @@ function SolutionSummaryCard({ summary }: { summary: import("@/api/solver").Solu
           )}
         </div>
 
+        {/* ── Class End Times ── */}
+        {summary.class_end_times && summary.class_end_times.length > 0 && (
+          <div>
+            <p className="font-medium text-sm mb-2">שעות סיום לפי כיתה ויום</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="border-b text-muted-foreground">
+                    <th className="text-right py-1.5 px-2 font-medium">כיתה</th>
+                    {["ראשון","שני","שלישי","רביעי","חמישי"].map((d) => (
+                      <th key={d} className="text-center py-1.5 px-1 font-medium">{d}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.class_end_times.map((ct) => (
+                    <tr key={ct.class_id} className="border-b border-muted last:border-0 hover:bg-muted/50">
+                      <td className="py-1 px-2 font-medium">{ct.class_name}</td>
+                      {["ראשון","שני","שלישי","רביעי","חמישי"].map((d) => {
+                        const val = ct.end_times[d] || 0;
+                        return (
+                          <td key={d} className="text-center py-1 px-1">
+                            {val > 0 ? (
+                              <span className={`inline-block w-6 h-6 leading-6 rounded text-xs font-medium ${
+                                val >= 8 ? "bg-red-100 text-red-800" : val >= 7 ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
+                              }`}>
+                                {val}
+                              </span>
+                            ) : "—"}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ── Teacher End Times ── */}
+        {summary.teacher_end_times && summary.teacher_end_times.length > 0 && (
+          <div>
+            <p className="font-medium text-sm mb-2">שעות סיום לפי מורה ויום</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="border-b text-muted-foreground">
+                    <th className="text-right py-1.5 px-2 font-medium">מורה</th>
+                    {["ראשון","שני","שלישי","רביעי","חמישי"].map((d) => (
+                      <th key={d} className="text-center py-1.5 px-1 font-medium">{d}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.teacher_end_times.map((tt) => (
+                    <tr key={tt.teacher_id} className="border-b border-muted last:border-0 hover:bg-muted/50">
+                      <td className="py-1 px-2 font-medium">
+                        {tt.teacher_name}
+                        {tt.is_homeroom && <span className="text-xs text-muted-foreground mr-1">(מחנכת)</span>}
+                      </td>
+                      {["ראשון","שני","שלישי","רביעי","חמישי"].map((d) => {
+                        const val = tt.end_times[d] || 0;
+                        return (
+                          <td key={d} className="text-center py-1 px-1">
+                            {val > 0 ? (
+                              <span className={`inline-block w-6 h-6 leading-6 rounded text-xs font-medium ${
+                                val >= 8 ? "bg-red-100 text-red-800" : val >= 7 ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
+                              }`}>
+                                {val}
+                              </span>
+                            ) : "—"}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* ── Brain Rules ── */}
         <div>
           <button
@@ -875,7 +989,10 @@ function SolutionSummaryCard({ summary }: { summary: import("@/api/solver").Solu
               .filter((b) => expandedBrain || b.satisfaction < 1)
               .map((b) => (
                 <div key={b.constraint_id} className="flex items-center gap-2 text-sm">
-                  <span className="flex-1 truncate">{b.name}</span>
+                  <span className="flex-1 truncate">
+                    <span className="text-xs text-muted-foreground font-mono">#{b.constraint_id}</span>{" "}
+                    {b.name}
+                  </span>
                   <ScoreBar value={b.weighted_score} max={b.weight} className="w-28" />
                   <span className="text-xs text-muted-foreground w-16 text-left">
                     {b.weighted_score.toFixed(0)}/{b.weight}
@@ -898,7 +1015,7 @@ function SolutionSummaryCard({ summary }: { summary: import("@/api/solver").Solu
                     className="text-xs"
                   >
                     {b.satisfaction === 1 ? <Check className="h-3 w-3 ml-1" /> : <X className="h-3 w-3 ml-1" />}
-                    {b.name}
+                    #{b.constraint_id} {b.name}
                   </Badge>
                 ))}
               </div>
@@ -913,7 +1030,10 @@ function SolutionSummaryCard({ summary }: { summary: import("@/api/solver").Solu
             <div className="space-y-1.5">
               {user_constraints.items.map((s) => (
                 <div key={s.constraint_id} className="flex items-center gap-2 text-sm">
-                  <span className="flex-1 truncate">{s.name}</span>
+                  <span className="flex-1 truncate">
+                    <span className="text-xs text-muted-foreground font-mono">#{s.constraint_id}</span>{" "}
+                    {s.name}
+                  </span>
                   <ScoreBar value={s.weighted_score} max={s.weight} className="w-28" />
                   <span className="text-xs text-muted-foreground w-16 text-left">
                     {s.weighted_score.toFixed(0)}/{s.weight}

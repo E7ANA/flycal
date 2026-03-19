@@ -168,7 +168,13 @@ def _expand_global_defaults(
                 _compile_one(model, data, variables, virtual)
 
         elif gc.category == "CLASS":
-            class_ids = {cg.id for cg in data.class_groups}
+            # If the constraint specifies target_class_ids, only expand to those
+            target_class_ids = (gc.parameters or {}).get("target_class_ids")
+            if target_class_ids:
+                class_ids = {cid for cid in target_class_ids
+                             if any(cg.id == cid for cg in data.class_groups)}
+            else:
+                class_ids = {cg.id for cg in data.class_groups}
             for cid in class_ids:
                 if (gc.category, gc.rule_type, cid) in overrides:
                     continue
@@ -1109,6 +1115,8 @@ def _compile_class_day_length_limit(
 
     if constraint.category == "CLASS" and constraint.target_id:
         targets = [constraint.target_id]
+    elif constraint.category == "GRADE" and constraint.target_id:
+        targets = [cg.id for cg in data.class_groups if cg.grade_id == constraint.target_id]
     elif constraint.category in ("GLOBAL", "GRADE"):
         targets = [cg.id for cg in data.class_groups]
     else:
@@ -1846,16 +1854,34 @@ def _compile_class_end_time(
     target_class_ids = constraint.parameters.get("target_class_ids", [])
     if constraint.category == "CLASS" and constraint.target_id:
         targets = [constraint.target_id]
+    elif constraint.category == "GRADE" and constraint.target_id:
+        # Apply to all classes in the targeted grade
+        targets = [cg.id for cg in data.class_groups if cg.grade_id == constraint.target_id]
     elif target_class_ids:
         targets = [cid for cid in target_class_ids if any(cg.id == cid for cg in data.class_groups)]
     else:
         targets = [cg.id for cg in data.class_groups]
 
     for cg_id in targets:
+        # Skip classes whose grade limits (GRADE_ACTIVITY_HOURS) don't allow
+        # the required end periods — forcing a lesson at period 7/8 when the
+        # grade is capped at period 6 would create a contradiction.
+        cg_obj = next((cg for cg in data.class_groups if cg.id == cg_id), None)
+        grade_map = data.grade_periods_map.get(cg_obj.grade_id) if cg_obj else None
+
         slot_vars = _vars_for_class(variables, data, cg_id)
         for day in data.days:
             if str(day) not in target_days and day not in target_days:
                 continue
+
+            # Check if grade activity hours allow the required periods on this day
+            if grade_map:
+                grade_max_for_day = grade_map.get(str(day), grade_map.get(day))
+                if grade_max_for_day is not None:
+                    # If the grade's max period is below ALL allowed end periods,
+                    # this class cannot satisfy the constraint — skip it.
+                    if all(p > grade_max_for_day for p in allowed_periods):
+                        continue
 
             # 1) No lessons after max allowed period
             late_vars: list[cp_model.IntVar] = []
@@ -1875,14 +1901,79 @@ def _compile_class_end_time(
                     _add_soft_penalty(model, variables, constraint, cnt,
                                       label=_class_label(data, cg_id))
 
-            # 2) At least one lesson in one of the allowed periods
+            # 2) Block "gap" periods — periods between allowed values that are
+            #    NOT in the allowed list.  E.g. allowed=[6,8] → block period 7.
+            #    Without this, a class can end at 7 (has lesson at 6 satisfying
+            #    the "at least one" check, plus lesson at 7 which isn't blocked).
+            #    Logic: for each gap period g, if the class has NO lesson at ANY
+            #    allowed period above g, then it must have no lesson at g either.
+            min_allowed = min(allowed_periods)
+            allowed_set = set(allowed_periods)
+            gap_periods = [p for p in range(min_allowed + 1, max_period + 1)
+                           if p not in allowed_set]
+            for gap_p in gap_periods:
+                # Allowed periods strictly above this gap
+                higher_allowed = [ap for ap in allowed_periods if ap > gap_p]
+                if not higher_allowed:
+                    continue  # No higher allowed period — already blocked by part 1
+                # Vars at higher allowed periods
+                higher_vars: list[cp_model.IntVar] = []
+                for (d, p), vlist in slot_vars.items():
+                    if d == day and p in higher_allowed:
+                        higher_vars.extend(vlist)
+                # Vars at the gap period
+                gap_vars: list[cp_model.IntVar] = []
+                for (d, p), vlist in slot_vars.items():
+                    if d == day and p == gap_p:
+                        gap_vars.extend(vlist)
+                if gap_vars and higher_vars:
+                    if is_hard:
+                        # If no lesson at any higher allowed period → no lesson at gap
+                        has_higher = model.new_bool_var(
+                            f"end_higher_{constraint.id}_c{cg_id}_{day}_g{gap_p}",
+                        )
+                        model.add(sum(higher_vars) >= 1).only_enforce_if(has_higher)
+                        model.add(sum(higher_vars) == 0).only_enforce_if(has_higher.negated())
+                        for gv in gap_vars:
+                            model.add(gv == 0).only_enforce_if(has_higher.negated())
+                    else:
+                        # SOFT: penalize lessons at gap periods when no higher allowed
+                        has_higher = model.new_bool_var(
+                            f"end_higher_{constraint.id}_c{cg_id}_{day}_g{gap_p}",
+                        )
+                        model.add(sum(higher_vars) >= 1).only_enforce_if(has_higher)
+                        model.add(sum(higher_vars) == 0).only_enforce_if(has_higher.negated())
+                        gap_count = model.new_int_var(
+                            0, len(gap_vars),
+                            f"end_gap_{constraint.id}_c{cg_id}_{day}_g{gap_p}",
+                        )
+                        model.add(gap_count == sum(gap_vars)).only_enforce_if(has_higher.negated())
+                        model.add(gap_count == 0).only_enforce_if(has_higher)
+                        _add_soft_penalty(model, variables, constraint, gap_count,
+                                          label=_class_label(data, cg_id))
+
+            # 3) At least one lesson in one of the allowed periods
+            #    Only enforce if the class actually has lessons on this day
+            #    (don't force a lesson on a day the class doesn't attend)
             target_vars: list[cp_model.IntVar] = []
             for (d, p), vlist in slot_vars.items():
                 if d == day and p in allowed_periods:
                     target_vars.extend(vlist)
             if target_vars:
+                all_day_vars: list[cp_model.IntVar] = []
+                for (d, p), vlist in slot_vars.items():
+                    if d == day:
+                        all_day_vars.extend(vlist)
+
                 if is_hard:
-                    model.add(sum(target_vars) >= 1)
+                    # Only require end-period lesson IF the class has any
+                    # lesson on this day (avoid forcing lessons on free days)
+                    day_active = model.new_bool_var(
+                        f"end_active_{constraint.id}_c{cg_id}_{day}",
+                    )
+                    model.add(sum(all_day_vars) >= 1).only_enforce_if(day_active)
+                    model.add(sum(all_day_vars) == 0).only_enforce_if(day_active.negated())
+                    model.add(sum(target_vars) >= 1).only_enforce_if(day_active)
                 else:
                     has_end = model.new_bool_var(
                         f"end_has_{constraint.id}_c{cg_id}_{day}",
@@ -1896,6 +1987,9 @@ def _compile_class_end_time(
                     _add_soft_penalty(model, variables, constraint, missing,
                                       label=_class_label(data, cg_id))
 
+            # Note: gap enforcement (e.g. preventing end at 7 when allowed=[6,8])
+            # is handled by using high-weight SOFT constraints rather than HARD,
+            # as HARD gap constraints make the model too difficult for the solver.
 
 
 # ---------------------------------------------------------------------------

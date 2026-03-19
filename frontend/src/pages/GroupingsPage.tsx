@@ -1742,10 +1742,28 @@ export default function GroupingsPage() {
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-2xl font-bold">מקצועות</h2>
-            <Button size="sm" onClick={() => { setEditingSubject(null); setSubjectFormOpen(true); }}>
-              <Plus className="h-4 w-4" />
-              מקצוע חדש
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={async () => {
+                  const toUpdate = subjects.filter((s) => s.morning_priority == null);
+                  for (const s of toUpdate) {
+                    await updateSubject(s.id, { morning_priority: 70 });
+                  }
+                  qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
+                  toast.success(`הוגדר תעדוף בוקר ל-${toUpdate.length} מקצועות`);
+                }}
+                disabled={subjects.every((s) => s.morning_priority != null)}
+                title="הגדר תעדוף בוקר (70) לכל מקצוע שעדיין לא מוגדר"
+              >
+                תעדוף בוקר אוטומטי
+              </Button>
+              <Button size="sm" onClick={() => { setEditingSubject(null); setSubjectFormOpen(true); }}>
+                <Plus className="h-4 w-4" />
+                מקצוע חדש
+              </Button>
+            </div>
           </div>
           <DataTable
             compact
@@ -1801,6 +1819,27 @@ export default function GroupingsPage() {
                     {s.always_double ? "✓" : "—"}
                   </button>
                 ),
+                className: "w-16 text-center",
+              },
+              {
+                header: "בוקר",
+                accessor: (s: Subject) => {
+                  const val = s.morning_priority;
+                  return (
+                    <button
+                      type="button"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        await updateSubject(s.id, { morning_priority: val ? null : 70 });
+                        qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
+                      }}
+                      className={`cursor-pointer hover:opacity-70 font-bold ${val ? "text-amber-600" : "text-muted-foreground hover:text-amber-600"}`}
+                      title={val ? `תעדוף בוקר: ${val}. לחץ לביטול` : "לחץ להגדרת תעדוף בוקר (70)"}
+                    >
+                      {val ? val : "—"}
+                    </button>
+                  );
+                },
                 className: "w-16 text-center",
               },
               {

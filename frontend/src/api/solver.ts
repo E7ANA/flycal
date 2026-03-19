@@ -126,10 +126,25 @@ export interface BrainScoreItem {
   is_hard?: boolean;
 }
 
+export interface ClassEndTime {
+  class_id: number;
+  class_name: string;
+  end_times: Record<string, number>;
+}
+
+export interface TeacherEndTime {
+  teacher_id: number;
+  teacher_name: string;
+  is_homeroom: boolean;
+  end_times: Record<string, number>;
+}
+
 export interface SolutionSummary {
   solution_id: number;
   total_score: number;
   homeroom_summary: HomeroomTeacherSummary[];
+  class_end_times: ClassEndTime[];
+  teacher_end_times: TeacherEndTime[];
   brain_hard: { satisfied: number; total: number; items: BrainScoreItem[] };
   brain_soft: { items: BrainScoreItem[]; total_weight: number; total_scored: number };
   user_constraints: { items: BrainScoreItem[] };

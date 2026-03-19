@@ -905,6 +905,88 @@ def get_solution_summary(solution_id: int, db: Session = Depends(get_db)):
 
     homeroom_summary.sort(key=lambda x: x["class_name"])
 
+    # --- Class end times per day ---
+    class_end_times = []
+    all_classes = (
+        db.query(ClassGroup)
+        .filter(ClassGroup.school_id == school_id)
+        .order_by(ClassGroup.name)
+        .all()
+    )
+
+    # Build class -> day -> max period (including tracks)
+    class_day_max: dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for row in direct:
+        cg_id, _t, day, period = row
+        if cg_id and period > class_day_max[cg_id][day]:
+            class_day_max[cg_id][day] = period
+    for row in track_rows:
+        cg_id, _t, day, period = row
+        if cg_id and period > class_day_max[cg_id][day]:
+            class_day_max[cg_id][day] = period
+
+    for cg in all_classes:
+        day_ends = {}
+        for d in days_order:
+            last_p = class_day_max.get(cg.id, {}).get(d, 0)
+            day_ends[d] = last_p
+        class_end_times.append({
+            "class_id": cg.id,
+            "class_name": cg.name,
+            "end_times": {day_heb[d]: last_p for d, last_p in day_ends.items()},
+        })
+
+    # --- Teacher end times per day ---
+    teacher_end_times = []
+    all_teachers = (
+        db.query(Teacher)
+        .filter(Teacher.school_id == school_id)
+        .order_by(Teacher.name)
+        .all()
+    )
+
+    # Build teacher -> day -> max period (lessons + tracks + meetings)
+    teacher_day_max: dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for row in direct:
+        _cg_id, t_id, day, period = row
+        if t_id and period > teacher_day_max[t_id][day]:
+            teacher_day_max[t_id][day] = period
+    for row in track_rows:
+        _cg_id, t_id, day, period = row
+        if t_id and period > teacher_day_max[t_id][day]:
+            teacher_day_max[t_id][day] = period
+
+    # Include meetings
+    teacher_meeting_ids_all: dict[int, set[int]] = defaultdict(set)
+    for m in db.query(Meeting).filter(Meeting.school_id == school_id).all():
+        for t in m.teachers:
+            teacher_meeting_ids_all[t.id].add(m.id)
+
+    scheduled_meetings = (
+        db.query(ScheduledMeeting)
+        .filter(ScheduledMeeting.solution_id == solution_id)
+        .all()
+    )
+    for sm in scheduled_meetings:
+        for t_id, m_ids in teacher_meeting_ids_all.items():
+            if sm.meeting_id in m_ids:
+                if sm.period > teacher_day_max[t_id][sm.day]:
+                    teacher_day_max[t_id][sm.day] = sm.period
+
+    for t in all_teachers:
+        if t.id not in teacher_day_max:
+            continue  # Teacher has no lessons in this solution
+        day_ends = {}
+        for d in days_order:
+            last_p = teacher_day_max[t.id].get(d, 0)
+            day_ends[d] = last_p
+        teacher_end_times.append({
+            "teacher_id": t.id,
+            "teacher_name": t.name,
+            "is_homeroom": t.homeroom_class_id is not None,
+            "end_times": {day_heb[d]: last_p for d, last_p in day_ends.items()},
+        })
+
     # --- Brain scores grouped ---
     brain = breakdown.get("brain_scores", [])
     brain_hard = [b for b in brain if b.get("is_hard")]
@@ -918,6 +1000,8 @@ def get_solution_summary(solution_id: int, db: Session = Depends(get_db)):
         "solution_id": solution_id,
         "total_score": breakdown.get("total_score", 0),
         "homeroom_summary": homeroom_summary,
+        "class_end_times": class_end_times,
+        "teacher_end_times": teacher_end_times,
         "brain_hard": {
             "satisfied": brain_hard_ok,
             "total": len(brain_hard),

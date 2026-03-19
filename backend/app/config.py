@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # Solver
     solver_max_time: int = 300
     solver_max_solutions: int = 5
-    solver_num_workers: int = 8
+    solver_num_workers: int = 6
 
     # AI
     anthropic_api_key: str = ""

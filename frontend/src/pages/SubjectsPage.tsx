@@ -401,6 +401,31 @@ export default function SubjectsPage() {
     },
   });
 
+  const setMorningMut = useMutation({
+    mutationFn: ({ id, value }: { id: number; value: number | null }) =>
+      updateSubject(id, { morning_priority: value }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
+    },
+  });
+
+  const autoMorningMut = useMutation({
+    mutationFn: async () => {
+      // Set morning_priority=70 for all subjects that don't have one yet
+      const DEFAULT_PRIORITY = 70;
+      const toUpdate = subjects.filter((s) => s.morning_priority == null);
+      for (const s of toUpdate) {
+        await updateSubject(s.id, { morning_priority: DEFAULT_PRIORITY });
+      }
+      return toUpdate.length;
+    },
+    onSuccess: (count) => {
+      qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
+      toast.success(`הוגדר תעדוף בוקר ל-${count} מקצועות`);
+    },
+    onError: () => toast.error("שגיאה בהגדרת תעדוף"),
+  });
+
   const deleteMut = useMutation({
     mutationFn: () => deleteSubject(deleteTarget!.id),
     onSuccess: () => {
@@ -425,16 +450,27 @@ export default function SubjectsPage() {
       <section className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-2xl font-bold">מקצועות</h2>
-          <Button
-            size="sm"
-            onClick={() => {
-              setEditingSubject(null);
-              setSubjectFormOpen(true);
-            }}
-          >
-            <Plus className="h-4 w-4" />
-            מקצוע חדש
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => autoMorningMut.mutate()}
+              disabled={autoMorningMut.isPending || subjects.every((s) => s.morning_priority != null)}
+              title="הגדר תעדוף בוקר (70) לכל מקצוע שעדיין לא מוגדר"
+            >
+              תעדוף בוקר אוטומטי
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditingSubject(null);
+                setSubjectFormOpen(true);
+              }}
+            >
+              <Plus className="h-4 w-4" />
+              מקצוע חדש
+            </Button>
+          </div>
         </div>
         <DataTable
           compact
@@ -496,6 +532,41 @@ export default function SubjectsPage() {
                     }}
                     className="text-muted-foreground cursor-pointer hover:text-green-600"
                     title="לחץ להפעלת כפולים"
+                  >
+                    —
+                  </button>
+                );
+              },
+              className: "w-16 text-center",
+            },
+            {
+              header: "בוקר",
+              accessor: (s: Subject) => {
+                const val = s.morning_priority;
+                if (val != null && val > 0) {
+                  return (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMorningMut.mutate({ id: s.id, value: null });
+                      }}
+                      className="text-amber-600 font-bold cursor-pointer hover:opacity-70"
+                      title={`תעדוף בוקר: ${val}. לחץ לביטול`}
+                    >
+                      {val}
+                    </button>
+                  );
+                }
+                return (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMorningMut.mutate({ id: s.id, value: 70 });
+                    }}
+                    className="text-muted-foreground cursor-pointer hover:text-amber-600"
+                    title="לחץ להגדרת תעדוף בוקר (70)"
                   >
                     —
                   </button>

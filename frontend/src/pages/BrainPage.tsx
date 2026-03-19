@@ -339,16 +339,13 @@ const HOMEROOM_PRINCIPLE: BrainPrinciple = {
   id: "homeroom-early",
   name: "מחנכת פותחת בוקר ביום ראשון",
   description:
-    "מחנכת חייבת ללמד את הכיתה שלה ביום ראשון, ולפתוח בוקר (שעה 1) ביום ראשון. בנוסף, שעות מוקדמות מקבלות בונוס גבוה — במיוחד ביום ראשון.",
+    "העדפה שמחנכת תלמד את הכיתה שלה בשעה 1, במיוחד ביום ראשון. ניקוד גבוה יותר ככל שהמחנכת פותחת בוקר ביותר ימים.",
   category: "homeroom",
   details: [
-    "חובה: שיעור ביום ראשון (HARD)",
-    "חובה: פתיחת בוקר (שעה 1) ביום ראשון (HARD)",
-    "בונוס: שעה 1 ביום ראשון ×8, שעה 2 ×4",
-    "בונוס: שעה 1 בימים אחרים ×3, שעה 2 ×1",
-    "עונש: שעה 3+ — עונש גדל לפי איחור",
+    "SOFT: בונוס שעה 1 ביום ראשון ×4",
+    "SOFT: בונוס שעה 1 בימים אחרים ×2",
   ],
-  isHard: true,
+  isHard: false,
 };
 
 const BRAIN_CATEGORY_LABELS: Record<string, string> = {
@@ -554,16 +551,17 @@ function GlobalConstraintForm({
           </div>
           {type === "SOFT" && (
             <div>
-              <Label htmlFor="gc-weight">משקל ({weight})</Label>
-              <input
+              <Label htmlFor="gc-weight">משקל</Label>
+              <Input
                 id="gc-weight"
-                type="range"
-                min={1}
-                max={100}
+                type="number"
+                min={-10000}
+                max={10000}
                 value={weight}
-                onChange={(e) => setWeight(Number(e.target.value))}
-                className="w-full mt-2"
+                onChange={(e) => setWeight(Number(e.target.value) || 0)}
+                className="mt-1"
               />
+              <p className="text-xs text-muted-foreground mt-1">חיובי = בונוס (ככל שגבוה יותר, חשוב יותר) | שלילי = עונש</p>
             </div>
           )}
         </div>
@@ -1036,7 +1034,10 @@ function ConstraintRow({
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="font-medium text-sm">{c.name}</span>
+            <span className="font-medium text-sm">
+              <span className="text-xs text-muted-foreground font-mono">#{c.id}</span>{" "}
+              {c.name}
+            </span>
             <Badge
               variant={c.type === "HARD" ? "default" : "secondary"}
               className="shrink-0"
@@ -1060,17 +1061,14 @@ function ConstraintRow({
         </div>
 
         {c.type === "SOFT" && (
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-xs text-muted-foreground w-6 text-center">
-              {c.weight}
-            </span>
+          <div className="flex items-center gap-1.5 shrink-0">
             <input
-              type="range"
-              min={1}
-              max={100}
+              type="number"
+              min={-10000}
+              max={10000}
               value={c.weight}
-              onChange={(e) => onWeightChange(Number(e.target.value))}
-              className="w-20"
+              onChange={(e) => onWeightChange(Number(e.target.value) || 0)}
+              className="w-20 h-7 text-xs text-center border rounded px-1"
             />
           </div>
         )}

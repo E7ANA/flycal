@@ -928,17 +928,28 @@ def _add_meetings_on_teaching_days(
             if not day_meeting_vars:
                 continue
 
-            # If meeting is pinned to this day, skip frontal-lesson enforcement.
-            # The teacher is already committed to being at school for the meeting.
-            if day in pinned_days:
-                continue
+            # For non-pinned days, enforce all relevant teachers.
+            # For pinned days of mandatory meetings: still enforce locked
+            # teachers — they must teach on days they attend a mandatory meeting.
+            # For pinned days of non-mandatory meetings: skip (teacher is
+            # already committed to being at school).
+            is_pinned_day = day in pinned_days
 
             # Determine which teachers to enforce for this meeting
             if is_mandatory:
-                enforced_teachers = [
-                    t for t in meeting.teachers
-                    if t.id not in conflicting_teacher_ids
-                ]
+                if is_pinned_day:
+                    # Pinned mandatory day: only enforce locked teachers
+                    enforced_teachers = [
+                        t for t in meeting.teachers
+                        if t.id in locked_ids and t.id not in conflicting_teacher_ids
+                    ]
+                else:
+                    enforced_teachers = [
+                        t for t in meeting.teachers
+                        if t.id not in conflicting_teacher_ids
+                    ]
+            elif is_pinned_day:
+                continue  # Non-mandatory pinned day: skip enforcement
             elif locked_ids:
                 # Non-mandatory but with locked teachers: only enforce locked ones
                 enforced_teachers = [

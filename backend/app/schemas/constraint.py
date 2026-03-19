@@ -28,8 +28,8 @@ class ConstraintCreate(BaseModel):
     @field_validator("weight")
     @classmethod
     def weight_range(cls, v: int) -> int:
-        if not 1 <= v <= 100:
-            raise ValueError("weight חייב להיות בין 1 ל-100")
+        if not -10000 <= v <= 10000:
+            raise ValueError("weight חייב להיות בין -10000 ל-10000")
         return v
 
 
@@ -49,8 +49,8 @@ class ConstraintUpdate(BaseModel):
     @field_validator("weight")
     @classmethod
     def weight_range(cls, v: int | None) -> int | None:
-        if v is not None and not 1 <= v <= 100:
-            raise ValueError("weight חייב להיות בין 1 ל-100")
+        if v is not None and not -10000 <= v <= 10000:
+            raise ValueError("weight חייב להיות בין -10000 ל-10000")
         return v
 
 
@@ -83,8 +83,8 @@ class ConstraintWeightUpdate(BaseModel):
     @field_validator("weight")
     @classmethod
     def weight_range(cls, v: int) -> int:
-        if not 1 <= v <= 100:
-            raise ValueError("weight חייב להיות בין 1 ל-100")
+        if not -10000 <= v <= 10000:
+            raise ValueError("weight חייב להיות בין -10000 ל-10000")
         return v
 
 

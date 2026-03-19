@@ -47,7 +47,7 @@ import type { ValidationResult, Solution } from "@/types/models";
 export default function SolverPage() {
   const schoolId = useSchoolStore((s) => s.activeSchoolId);
 
-  const [maxTime, setMaxTime] = useState(30);
+  const [maxTime, setMaxTime] = useState(180);
   const [maxSolutions, setMaxSolutions] = useState(1);
   const [numWorkers, setNumWorkers] = useState(8);
 
