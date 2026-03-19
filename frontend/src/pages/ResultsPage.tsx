@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, BarChart3, Eye, Download, FileText, AlertTriangle, Users, Check, X, ClipboardList, ChevronDown, ChevronUp } from "lucide-react";
+import { Trash2, BarChart3, Eye, Download, FileText, AlertTriangle, Users, Check, X, ClipboardList, ChevronDown, ChevronUp, ChevronLeft, ChevronRight } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import { useAuthStore } from "@/stores/authStore";
@@ -177,6 +177,20 @@ export default function ResultsPage() {
   const classMap = Object.fromEntries(
     classes.map((c) => [c.id, c.name]),
   );
+
+  // Arrow navigation for teachers
+  const sortedTeachers = [...teachers].sort((a, b) => a.name.localeCompare(b.name, "he"));
+  const currentTeacherIndex = sortedTeachers.findIndex((t) => t.id === viewTargetId);
+  const handlePrevTeacher = () => {
+    if (!sortedTeachers.length) return;
+    const newIdx = currentTeacherIndex <= 0 ? sortedTeachers.length - 1 : currentTeacherIndex - 1;
+    setViewTargetId(sortedTeachers[newIdx].id);
+  };
+  const handleNextTeacher = () => {
+    if (!sortedTeachers.length) return;
+    const newIdx = currentTeacherIndex >= sortedTeachers.length - 1 ? 0 : currentTeacherIndex + 1;
+    setViewTargetId(sortedTeachers[newIdx].id);
+  };
 
   const meetingMap = Object.fromEntries(
     meetings.map((m) => [m.id, { id: m.id, name: m.name, color: m.color }]),
@@ -635,7 +649,39 @@ export default function ResultsPage() {
                   <option value="meetings">מערכת ישיבות</option>
                 </Select>
 
-                {viewMode !== "meetings" && (
+                {viewMode === "teacher" && (
+                  <div
+                    className="flex items-center gap-1 flex-1 border rounded-md px-2 py-1"
+                    dir="ltr"
+                  >
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 shrink-0"
+                      onClick={handlePrevTeacher}
+                      disabled={!sortedTeachers.length}
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <span className="flex-1 text-center text-sm font-medium truncate">
+                      {sortedTeachers.find((t) => t.id === viewTargetId)?.name ?? "בחר מורה"}
+                    </span>
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      {currentTeacherIndex >= 0 ? `${currentTeacherIndex + 1}/${sortedTeachers.length}` : ""}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 shrink-0"
+                      onClick={handleNextTeacher}
+                      disabled={!sortedTeachers.length}
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                )}
+
+                {(viewMode === "class" || viewMode === "subject") && (
                   <Select
                     className="flex-1"
                     value={viewTargetId ?? ""}
@@ -646,19 +692,9 @@ export default function ResultsPage() {
                     }
                   >
                     <option value="">
-                      בחר{" "}
-                      {viewMode === "class"
-                        ? "כיתה"
-                        : viewMode === "teacher"
-                          ? "מורה"
-                          : "מקצוע"}
+                      בחר {viewMode === "class" ? "כיתה" : "מקצוע"}
                     </option>
-                    {(viewMode === "class"
-                      ? classes
-                      : viewMode === "teacher"
-                        ? teachers
-                        : subjects
-                    ).map((item) => (
+                    {(viewMode === "class" ? classes : subjects).map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.name}
                       </option>
