@@ -1162,7 +1162,7 @@ def _compile_minimize_teacher_days(
                 teacher_ids.add(track.teacher_id)
 
     for teacher_id in teacher_ids:
-        by_day = _vars_for_teacher_by_day(variables, data, teacher_id)
+        by_day = _vars_for_teacher_by_day(variables, data, teacher_id, include_meetings=True)
         for day, day_vars in by_day.items():
             b = model.new_bool_var(f"min_days_{constraint.id}_t{teacher_id}_{day}")
             model.add(sum(day_vars) >= 1).only_enforce_if(b)

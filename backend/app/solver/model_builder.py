@@ -1042,9 +1042,11 @@ def _add_teacher_blocked_slots(
                         if tk in variables.x_track:
                             model.add(variables.x_track[tk] == 0)
 
-            # Block meeting variables — but only if ALL participating teachers
-            # are blocked at this slot.  If only some are blocked they simply
-            # don't attend; the meeting still takes place.
+            # Block meeting variables when:
+            # 1. ALL participating teachers are blocked here (original logic), OR
+            # 2. This teacher is management/exempt — their blocked slots are hard
+            #    personal constraints that meetings must also respect.
+            is_exempt = teacher_id in data.meeting_day_exempt_ids
             for meeting in data.meetings:
                 participating = [t for t in meeting.teachers if t.id == teacher_id]
                 if not participating:
@@ -1052,12 +1054,11 @@ def _add_teacher_blocked_slots(
                 mk = (meeting.id, day, period)
                 if mk not in variables.x_meeting:
                     continue
-                # Check whether every teacher in the meeting is blocked here
                 all_blocked = all(
                     (day, period) in data.teacher_blocked_slots.get(t.id, set())
                     for t in meeting.teachers
                 )
-                if all_blocked:
+                if all_blocked or is_exempt:
                     model.add(variables.x_meeting[mk] == 0)
 
 

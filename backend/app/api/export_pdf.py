@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.class_group import ClassGroup, Grade, GroupingCluster, Track
-from app.models.meeting import Meeting
+from app.models.meeting import Meeting, MeetingType
 from app.models.school import School
 from app.models.subject import Subject
 from app.models.teacher import Teacher
@@ -189,6 +189,71 @@ td.empty {
     display: block;
     white-space: nowrap;
     overflow: hidden;
+}
+
+/* ── Plenary attendance page ── */
+.plenary-section {
+    margin-bottom: 12pt;
+    border: 1px solid #e2e8f0;
+    border-radius: 4pt;
+    overflow: hidden;
+}
+.plenary-section-header {
+    background: #f1f5f9;
+    padding: 5pt 8pt;
+    border-bottom: 1px solid #e2e8f0;
+}
+.plenary-section-header .plenary-name {
+    font-size: 11pt;
+    font-weight: 700;
+    color: #1e293b;
+}
+.plenary-section-header .plenary-day {
+    font-size: 8.5pt;
+    color: #6d28d9;
+    margin-right: 8pt;
+}
+.plenary-section-header .plenary-count {
+    font-size: 8pt;
+    color: #64748b;
+    float: left;
+}
+.plenary-cols {
+    display: flex;
+    gap: 0;
+}
+.plenary-col {
+    flex: 1;
+    padding: 6pt 8pt;
+}
+.plenary-col:first-child {
+    border-left: 1px solid #e2e8f0;
+}
+.plenary-col-header {
+    font-size: 8pt;
+    font-weight: 700;
+    margin-bottom: 4pt;
+    padding-bottom: 3pt;
+    border-bottom: 2px solid currentColor;
+}
+.plenary-col-header.present { color: #16a34a; border-bottom-color: #16a34a; }
+.plenary-col-header.absent  { color: #dc2626; border-bottom-color: #dc2626; }
+.plenary-col-header.mandatory { color: #2563eb; border-bottom-color: #2563eb; }
+.teacher-row {
+    font-size: 7.5pt;
+    padding: 1.5pt 0;
+    color: #1e293b;
+    border-bottom: 1px solid #f1f5f9;
+}
+.teacher-row:last-child { border-bottom: none; }
+.badge-locked {
+    display: inline-block;
+    font-size: 6pt;
+    background: #dbeafe;
+    color: #1d4ed8;
+    border-radius: 2pt;
+    padding: 0 3pt;
+    margin-right: 3pt;
 }
 
 /* ── Meeting card ── */
@@ -463,6 +528,90 @@ def _render_meetings_page(
     return html
 
 
+def _render_plenary_page(
+    plenary_meetings: list[Meeting],
+    scheduled_meetings: list[ScheduledMeeting],
+    lessons: list[ScheduledLesson],
+) -> str:
+    """One page showing attendance for all plenary meetings."""
+    # Build teacher-day mapping from lessons
+    teacher_days: dict[int, set[str]] = {}
+    for lesson in lessons:
+        teacher_days.setdefault(lesson.teacher_id, set()).add(lesson.day)
+
+    # Build scheduled day per meeting
+    meeting_scheduled_days: dict[int, set[str]] = {}
+    for sm in scheduled_meetings:
+        meeting_scheduled_days.setdefault(sm.meeting_id, set()).add(sm.day)
+
+    html = '<div class="page">\n<div class="page-header">'
+    html += '<h2 class="meetings-header">נוכחות ישיבת מליאה</h2>'
+    html += '</div>\n'
+
+    for meeting in plenary_meetings:
+        locked_ids = set(meeting.locked_teacher_ids or [])
+        plenary_days = meeting_scheduled_days.get(meeting.id, set())
+        day_labels = " | ".join(DAY_LABELS.get(d, d) for d in sorted(plenary_days))
+
+        mandatory_teachers = [t for t in meeting.teachers if t.id in locked_ids]
+        preferred_attending = []
+        preferred_absent = []
+        for t in meeting.teachers:
+            if t.id in locked_ids:
+                continue
+            t_days = teacher_days.get(t.id, set())
+            if plenary_days & t_days:
+                preferred_attending.append(t)
+            else:
+                preferred_absent.append(t)
+
+        total = len(meeting.teachers)
+        attending = len(mandatory_teachers) + len(preferred_attending)
+
+        html += '<div class="plenary-section">'
+        html += '<div class="plenary-section-header">'
+        html += f'<span class="plenary-name">{escape(meeting.name)}</span>'
+        if day_labels:
+            html += f'<span class="plenary-day">יום {day_labels}</span>'
+        html += f'<span class="plenary-count">נוכחים: {attending}/{total}</span>'
+        html += '</div>'
+
+        html += '<div class="plenary-cols">'
+
+        # Column 1: mandatory (locked)
+        html += '<div class="plenary-col">'
+        html += '<div class="plenary-col-header mandatory">נעולות — תמיד נוכחות</div>'
+        for t in sorted(mandatory_teachers, key=lambda x: x.name):
+            html += f'<div class="teacher-row">{escape(t.name)}</div>'
+        if not mandatory_teachers:
+            html += '<div class="teacher-row" style="color:#94a3b8">—</div>'
+        html += '</div>'
+
+        # Column 2: preferred attending
+        html += '<div class="plenary-col">'
+        html += '<div class="plenary-col-header present">מועדפות — נוכחות ✓</div>'
+        for t in sorted(preferred_attending, key=lambda x: x.name):
+            html += f'<div class="teacher-row">{escape(t.name)}</div>'
+        if not preferred_attending:
+            html += '<div class="teacher-row" style="color:#94a3b8">—</div>'
+        html += '</div>'
+
+        # Column 3: preferred absent
+        html += '<div class="plenary-col">'
+        html += '<div class="plenary-col-header absent">מועדפות — נעדרות ✗</div>'
+        for t in sorted(preferred_absent, key=lambda x: x.name):
+            html += f'<div class="teacher-row">{escape(t.name)}</div>'
+        if not preferred_absent:
+            html += '<div class="teacher-row" style="color:#94a3b8">—</div>'
+        html += '</div>'
+
+        html += '</div>'  # plenary-cols
+        html += '</div>'  # plenary-section
+
+    html += '</div>\n'  # page
+    return html
+
+
 @router.get("/solutions/{solution_id}/export/pdf")
 def export_pdf(solution_id: int, db: Session = Depends(get_db)):
     """Export a solution as a styled PDF document."""
@@ -581,6 +730,16 @@ def export_pdf(solution_id: int, db: Session = Depends(get_db)):
                 track_map, days, max_period,
                 meeting_grid=t_mtg_grid,
             ))
+
+    # ── Plenary attendance page ───────────────────────────────────────────────
+    plenary_meetings = [
+        m for m in all_meetings
+        if m.meeting_type == MeetingType.PLENARY.value and m.is_active
+    ]
+    if plenary_meetings:
+        html_parts.append(_render_plenary_page(
+            plenary_meetings, scheduled_meetings, lessons,
+        ))
 
     # ── Meetings timetable (separate page) ────────────────────────────────────
     if scheduled_meetings:

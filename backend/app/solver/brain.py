@@ -1621,6 +1621,24 @@ def _apply_max_days_by_frontal(
                 if m_id == meeting.id and day in pinned_days:
                     teacher_day_vars[teacher.id][day].append(var)
 
+    # Pre-build meeting vars by (teacher_id, day) for manual max_work_days.
+    # Only used for teachers whose limit comes from an explicit max_work_days
+    # setting — NOT for Oz LaTmura automatic limits (avoids infeasibility for
+    # part-time teachers whose meetings span more days than their teaching days).
+    teacher_meeting_day_vars: dict[int, dict[str, list[cp_model.IntVar]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for key, var in variables.x_meeting.items():
+        m_id, day, _p = key
+        meeting = next((m for m in data.meetings if m.id == m_id), None)
+        if meeting is None or not meeting.teachers:
+            continue
+        seen: set[int] = set()
+        for teacher in meeting.teachers:
+            if teacher.id not in seen:
+                seen.add(teacher.id)
+                teacher_meeting_day_vars[teacher.id][day].append(var)
+
     breakdown: list[dict] = []
 
     total_days = len(data.days)
@@ -1661,7 +1679,18 @@ def _apply_max_days_by_frontal(
         if min_free > 0:
             max_days = min(max_days, total_days - min_free)
 
-        by_day = teacher_day_vars.get(t_id, {})
+        by_day = dict(teacher_day_vars.get(t_id, {}))
+
+        # For manual max_work_days: meetings count as presence too.
+        # A management teacher attending a meeting on a day with no lessons
+        # is still physically present — that day counts against their limit.
+        # (For automatic Oz LaTmura limits we deliberately exclude meetings
+        #  to avoid infeasibility for part-time staff.)
+        if source == "ידני":
+            for day, mvars in teacher_meeting_day_vars.get(t_id, {}).items():
+                existing = list(by_day.get(day, []))
+                existing.extend(mvars)
+                by_day[day] = existing
 
         day_active: list[cp_model.IntVar] = []
         for day, day_vars in by_day.items():
