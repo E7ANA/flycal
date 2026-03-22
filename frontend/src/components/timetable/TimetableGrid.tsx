@@ -148,13 +148,13 @@ export function TimetableGrid({
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-sm">
+    <div className="w-full">
+      <table className="w-full border-collapse text-[clamp(0.65rem,1.1vw,0.875rem)] table-fixed">
         <thead>
           <tr>
-            <th className="border p-2 bg-muted/50 w-16">שעה</th>
+            <th className="border p-1.5 bg-muted/50 w-[8%]">שעה</th>
             {days.map((day) => (
-              <th key={day} className="border p-2 bg-muted/50 min-w-[120px]">
+              <th key={day} className="border p-1.5 bg-muted/50">
                 {DAY_LABELS[day] ?? day}
               </th>
             ))}
@@ -163,7 +163,7 @@ export function TimetableGrid({
         <tbody>
           {periods.map((period) => (
             <tr key={period}>
-              <td className="border p-2 text-center font-medium bg-muted/30">
+              <td className="border p-1.5 text-center font-medium bg-muted/30">
                 {period}
               </td>
               {days.map((day) => {
@@ -179,73 +179,120 @@ export function TimetableGrid({
                   <td
                     key={day}
                     className={cn(
-                      "border p-1 h-16 align-top",
+                      "border p-1 align-top",
                       !hasContent && !hasPresence && "bg-muted/10",
                       hasPresence && presenceType === "פרטני" && "bg-blue-50",
                       hasPresence && (presenceType === "שהייה" || presenceType === "שהייה (ישיבה)") && "bg-amber-50",
                       hasPresence && presenceType === "חלון" && "bg-red-50",
                     )}
                   >
-                    {entries.map((entry, i) => {
-                      const subj = subjectMap[entry.subject_id];
-                      const isGrouping = entry.isTrack && entry.trackCount > 1;
-                      const isSingleTrack = entry.isTrack && entry.trackCount === 1;
-                      // For single track in teacher view: show the track name
-                      const displayName =
-                        isGrouping && entry.trackNames.length > 0
-                          ? entry.trackNames.join(" / ")
-                          : isSingleTrack && entry.trackNames.length > 0
-                            ? entry.trackNames[0]
-                            : (subj?.name ?? `מקצוע ${entry.subject_id}`);
-                      return (
-                        <div
-                          key={`l-${i}`}
-                          className="rounded px-2 py-1 text-xs mb-0.5"
-                          style={{
-                            backgroundColor: entry.isTrack
-                              ? (subj?.color
-                                  ? `${subj.color}30`
-                                  : "#dbeafe")
-                              : (subj?.color
-                                  ? `${subj.color}20`
-                                  : "#f3f4f6"),
-                            borderRight: `3px solid ${subj?.color ?? "#ccc"}`,
-                            borderLeft: entry.isTrack
-                              ? `3px solid ${subj?.color ?? "#3b82f6"}`
-                              : undefined,
-                          }}
-                        >
-                          <div className="font-medium">
-                            {isGrouping && (
-                              <span className="text-[10px] text-muted-foreground">
-                                הקבצה{" "}
-                              </span>
+                    {(() => {
+                      // Flatten all items (expand grouped tracks into individual items)
+                      const flatItems: {
+                        key: string;
+                        name: string;
+                        teacherName: string;
+                        className: string;
+                        color: string | null;
+                        isTrack: boolean;
+                      }[] = [];
+
+                      for (const entry of entries) {
+                        const subj = subjectMap[entry.subject_id];
+                        const isGrouping = entry.isTrack && entry.trackCount > 1;
+
+                        if (isGrouping) {
+                          entry.trackNames.forEach((tName, ti) => {
+                            const tTeacher = entry.trackTeacherIds[ti];
+                            flatItems.push({
+                              key: `g-${entry.subject_id}-${ti}`,
+                              name: tName,
+                              teacherName: tTeacher ? (teacherMap[tTeacher] ?? "") : "",
+                              className: "",
+                              color: subj?.color ?? null,
+                              isTrack: true,
+                            });
+                          });
+                        } else {
+                          const isSingleTrack = entry.isTrack && entry.trackCount === 1;
+                          const displayName =
+                            isSingleTrack && entry.trackNames.length > 0
+                              ? entry.trackNames[0]
+                              : (subj?.name ?? `מקצוע ${entry.subject_id}`);
+                          flatItems.push({
+                            key: `r-${entry.subject_id}-${entry.teacher_id}`,
+                            name: displayName,
+                            teacherName: teacherMap[entry.teacher_id] ?? "",
+                            className: showClass && entry.class_group_id && classMap
+                              ? (classMap[entry.class_group_id] ?? "")
+                              : "",
+                            color: subj?.color ?? null,
+                            isTrack: entry.isTrack,
+                          });
+                        }
+                      }
+
+                      const isMulti = flatItems.length > 1;
+
+                      // Single item → full-width block
+                      if (!isMulti && flatItems.length === 1) {
+                        const item = flatItems[0];
+                        return (
+                          <div
+                            className="rounded px-2 py-1 text-xs mb-0.5"
+                            style={{
+                              backgroundColor: item.color
+                                ? `${item.color}${item.isTrack ? "30" : "20"}`
+                                : item.isTrack ? "#dbeafe" : "#f3f4f6",
+                              borderRight: `3px solid ${item.color ?? "#ccc"}`,
+                              borderLeft: item.isTrack
+                                ? `3px solid ${item.color ?? "#3b82f6"}`
+                                : undefined,
+                            }}
+                          >
+                            <div className="font-medium truncate">{item.name}</div>
+                            {showTeacher && (
+                              <div className="text-muted-foreground truncate">{item.teacherName}</div>
                             )}
-                            {displayName}
+                            {item.className && (
+                              <div className="text-muted-foreground truncate">{item.className}</div>
+                            )}
                           </div>
-                          {showTeacher && !isGrouping && (
-                            <div className="text-muted-foreground">
-                              {teacherMap[entry.teacher_id] ?? ""}
-                            </div>
-                          )}
-                          {showTeacher && isGrouping && (
-                            <div className="text-muted-foreground truncate">
-                              {entry.trackTeacherIds
-                                .map((tid) => teacherMap[tid] ?? "")
-                                .filter(Boolean)
-                                .join(" / ")}
-                            </div>
-                          )}
-                          {showClass &&
-                            entry.class_group_id &&
-                            classMap && (
-                              <div className="text-muted-foreground">
-                                {classMap[entry.class_group_id] ?? ""}
+                        );
+                      }
+
+                      // Multiple items → always one row, side by side
+                      return (
+                        <div className="flex gap-0.5 mb-0.5">
+                          {flatItems.map((item) => {
+                            const shortName = item.name.length > 8
+                              ? item.name.split(/\s/)[0] || item.name.slice(0, 6)
+                              : item.name;
+                            const shortTeacher = item.teacherName.length > 6
+                              ? item.teacherName.split(/\s/)[0] || item.teacherName.slice(0, 5)
+                              : item.teacherName;
+                            return (
+                              <div
+                                key={item.key}
+                                className="flex-1 rounded px-1 py-0.5 text-[10px] min-w-0"
+                                title={`${item.name} — ${item.teacherName}`}
+                                style={{
+                                  backgroundColor: item.color
+                                    ? `${item.color}30`
+                                    : "#dbeafe",
+                                  borderRight: `2px solid ${item.color ?? "#ccc"}`,
+                                }}
+                              >
+                                <div className="font-medium truncate">{shortName}</div>
+                                {showTeacher && (
+                                  <div className="text-muted-foreground truncate">{shortTeacher}</div>
+                                )}
                               </div>
-                            )}
+                            );
+                          })}
                         </div>
                       );
-                    })}
+                    })()}
                     {cellMeetings.map((m, i) => {
                       const info = meetingMap[m.meeting_id];
                       const absentTeachers = meetingAbsences.filter(

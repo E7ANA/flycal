@@ -221,6 +221,7 @@ function ClassFormDialog({
         <p className="text-xs text-muted-foreground -mt-2">
           כשמסומן — המחנכת חייבת ללמד בכיתה בכל יום שהיא בבית הספר (אילוץ קשיח).
           כשלא מסומן — מועדף אך לא מחייב.
+          שיעור <strong>כינוס</strong> אינו נחשב כמפגש עם הכיתה לצורך כלל זה.
         </p>
 
         <DialogFooter>

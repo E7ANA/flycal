@@ -196,6 +196,10 @@ def apply_brain_constraints(
     _apply_max_days_by_frontal(model, data, variables, teacher_frontal)
     # HARD: max 6 consecutive frontal teaching hours per day
     _apply_max_consecutive_frontal(model, data, variables)
+    # HARD: management team gets at least 1 free day per week
+    _apply_management_free_day(model, data, variables)
+    # SOFT: transport teachers prefer early finish
+    _apply_transport_early_finish(model, data, variables)
 
 
 # ── Same-day consecutive (HARD) ───────────────────────────────────────────
@@ -982,7 +986,7 @@ def _apply_homeroom_daily_meeting(
         class_name_map[cg.id] = cg.name
         class_required_map[cg.id] = getattr(cg, "homeroom_daily_required", False)
 
-    # Build teacher_id -> set of days teacher has ANY teaching activity
+    # Build teacher_id -> set of days teacher has ANY presence (lessons, tracks, meetings)
     teacher_active_days: dict[int, dict[str, list[cp_model.IntVar]]] = {}
     for key, var in variables.x.items():
         _c, _s, t_id, day, _p = key
@@ -994,19 +998,33 @@ def _apply_homeroom_daily_meeting(
                     tk_id, day, _p = key
                     if tk_id == track.id:
                         teacher_active_days.setdefault(track.teacher_id, {}).setdefault(day, []).append(var)
+    # Meetings count as presence — if teacher attends a meeting she's at school
+    for key, var in variables.x_meeting.items():
+        m_id, day, _p = key
+        meeting = next((m for m in data.meetings if m.id == m_id), None)
+        if meeting is None or not meeting.teachers:
+            continue
+        for teacher in meeting.teachers:
+            if teacher.id in data.homeroom_map:
+                teacher_active_days.setdefault(teacher.id, {}).setdefault(day, []).append(var)
 
     brain_id = _next_brain_id() - 1
     has_any_penalty = False
+
+    # כינוס lessons don't count as "meeting the class"
+    kinoos_subject_ids: set[int] = {
+        s.id for s in data.all_subjects if s.name and "כינוס" in s.name
+    }
 
     for teacher_id, class_id in data.homeroom_map.items():
         is_required = class_required_map.get(class_id, False)
         class_name = class_name_map.get(class_id, str(class_id))
 
-        # Find lessons where this teacher teaches this class
+        # Find lessons where this teacher teaches this class (excluding כינוס)
         relevant_keys: dict[str, list[cp_model.IntVar]] = {}
         for key, var in variables.x.items():
-            c_id, _s, t_id, day, _p = key
-            if c_id == class_id and t_id == teacher_id:
+            c_id, s_id, t_id, day, _p = key
+            if c_id == class_id and t_id == teacher_id and s_id not in kinoos_subject_ids:
                 relevant_keys.setdefault(day, []).append(var)
 
         # Also check tracks that serve this class
@@ -1811,5 +1829,169 @@ def _apply_max_consecutive_frontal(
             "name": "מקסימום 6 שעות פרונטליות רצופות ליום",
             "weight": 0,
             "is_hard": True,
+        }
+        _update_brain_id(brain_id)
+
+
+# ── Management team free day (HARD) ─────────────────────────────────────
+
+def _apply_management_free_day(
+    model: cp_model.CpModel,
+    data: SolverData,
+    variables: SolverVariables,
+) -> None:
+    """HARD: every management team member gets at least 1 free day per week.
+
+    Management = is_management | is_principal | is_director | is_pedagogical_coordinator.
+    A "work day" counts lessons, tracks, AND meetings.
+    If the teacher already has a tighter limit (e.g., max_work_days=3 on a 5-day week),
+    this constraint is redundant but harmless.
+    """
+    if not data.management_teacher_ids:
+        return
+
+    brain_id = _next_brain_id() - 1
+    total_days = len(data.days)
+    max_days = total_days - 1  # At least 1 free day
+
+    # Build teacher -> day -> [vars] for lessons + tracks + meetings
+    teacher_day_vars: dict[int, dict[str, list[cp_model.IntVar]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+
+    for key, var in variables.x.items():
+        _c, _s, t_id, day, _p = key
+        if t_id in data.management_teacher_ids:
+            teacher_day_vars[t_id][day].append(var)
+
+    for cluster in data.clusters:
+        for track in cluster.tracks:
+            if track.teacher_id in data.management_teacher_ids:
+                for key, var in variables.x_track.items():
+                    tk_id, day, _p = key
+                    if tk_id == track.id:
+                        teacher_day_vars[track.teacher_id][day].append(var)
+
+    # Include meetings — management attending a meeting counts as presence
+    for key, var in variables.x_meeting.items():
+        m_id, day, _p = key
+        meeting = next((m for m in data.meetings if m.id == m_id), None)
+        if meeting is None or not meeting.teachers:
+            continue
+        for teacher in meeting.teachers:
+            if teacher.id in data.management_teacher_ids:
+                teacher_day_vars[teacher.id][day].append(var)
+
+    breakdown: list[dict] = []
+
+    for t_id in data.management_teacher_ids:
+        by_day = teacher_day_vars.get(t_id, {})
+        if not by_day:
+            continue
+
+        day_active: list[cp_model.IntVar] = []
+        for day, day_vars in by_day.items():
+            if not day_vars:
+                continue
+            b = model.new_bool_var(f"brain_mgmt_freeday_t{t_id}_{day}")
+            model.add(sum(day_vars) >= 1).only_enforce_if(b)
+            model.add(sum(day_vars) == 0).only_enforce_if(b.negated())
+            day_active.append(b)
+
+        if day_active:
+            model.add(sum(day_active) <= max_days)
+
+        # Find teacher name
+        teacher_name = f"מורה {t_id}"
+        for req in data.requirements:
+            if req.teacher_id == t_id and hasattr(req, "teacher") and req.teacher:
+                teacher_name = req.teacher.name
+                break
+        else:
+            for cluster in data.clusters:
+                for track in cluster.tracks:
+                    if track.teacher_id == t_id and hasattr(track, "teacher") and track.teacher:
+                        teacher_name = track.teacher.name
+                        break
+
+        breakdown.append({
+            "teacher_id": t_id,
+            "teacher_name": teacher_name,
+            "max_days": max_days,
+        })
+
+    if breakdown:
+        variables.brain_info[brain_id] = {
+            "name": "יום חופשי לצוות ניהול",
+            "weight": 0,
+            "is_hard": True,
+            "breakdown": breakdown,
+        }
+        _update_brain_id(brain_id)
+
+
+# ── Transport teachers: prefer early finish (SOFT) ──────────────────────
+
+def _apply_transport_early_finish(
+    model: cp_model.CpModel,
+    data: SolverData,
+    variables: SolverVariables,
+) -> None:
+    """SOFT: teachers with transport_priority should finish as early as possible.
+
+    The transport_priority value (1-100) is used as the constraint weight.
+    Penalizes lessons at later periods with increasing penalty:
+    Period 5→2, period 6→4, period 7→6, period 8→8.
+    """
+    if not data.transport_priorities:
+        return
+
+    brain_id = _next_brain_id() - 1
+
+    def _period_penalty(p: int) -> int:
+        if p <= 4:
+            return 0
+        return (p - 4) * 2
+
+    has_any = False
+
+    for key, var in variables.x.items():
+        _c, _s, t_id, _day, period = key
+        weight = data.transport_priorities.get(t_id)
+        if weight is None:
+            continue
+        pen = _period_penalty(period)
+        if pen <= 0:
+            continue
+        weighted = model.new_int_var(
+            0, pen, f"brain_transport_t{t_id}_{_day}_p{period}"
+        )
+        model.add(weighted == pen * var)
+        variables.penalties.append((weighted, weight, brain_id))
+        has_any = True
+
+    for cluster in data.clusters:
+        for track in cluster.tracks:
+            weight = data.transport_priorities.get(track.teacher_id)
+            if weight is None:
+                continue
+            for key, var in variables.x_track.items():
+                tk_id, _day, period = key
+                if tk_id != track.id:
+                    continue
+                pen = _period_penalty(period)
+                if pen <= 0:
+                    continue
+                weighted = model.new_int_var(
+                    0, pen, f"brain_transport_tk{tk_id}_{_day}_p{period}"
+                )
+                model.add(weighted == pen * var)
+                variables.penalties.append((weighted, weight, brain_id))
+                has_any = True
+
+    if has_any:
+        variables.brain_info[brain_id] = {
+            "name": "עדיפות יום מוקדם למורים",
+            "weight": 0,  # Per-teacher weight used directly
         }
         _update_brain_id(brain_id)

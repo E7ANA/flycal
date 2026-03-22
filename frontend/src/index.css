@@ -1,32 +1,33 @@
 @import "tailwindcss";
 
 @theme {
-  /* flycal brand palette — sky blue gradient */
-  --color-background: #f8fbff;
-  --color-foreground: #1a2332;
-  --color-muted: #edf4fb;
-  --color-muted-foreground: #6b7f96;
-  --color-border: #d4e3f0;
-  --color-input: #d4e3f0;
-  --color-ring: #5ba8d4;
-  --color-primary: #5ba8d4;
+  /* logiclass brand palette — inspired by claude.ai aesthetic */
+  --color-background: #F9F8F6;
+  --color-foreground: #0D0D0D;
+  --color-muted: #F0EFED;
+  --color-muted-foreground: #6B6560;
+  --color-border: #E8E6E3;
+  --color-input: #E8E6E3;
+  --color-ring: #1B365D;
+  --color-primary: #1B365D;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #edf4fb;
-  --color-secondary-foreground: #1a2332;
-  --color-destructive: #e5574f;
+  --color-secondary: #F0EFED;
+  --color-secondary-foreground: #0D0D0D;
+  --color-destructive: #C4342D;
   --color-destructive-foreground: #ffffff;
-  --color-accent: #e0f0fa;
-  --color-accent-foreground: #1a2332;
-  --color-card: #ffffff;
-  --color-card-foreground: #1a2332;
-  --color-popover: #ffffff;
-  --color-popover-foreground: #1a2332;
-  --color-success: #4caf82;
-  --color-success-foreground: #ffffff;
-  --radius-sm: 0.25rem;
+  --color-accent: #EEEDEB;
+  --color-accent-foreground: #0D0D0D;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #0D0D0D;
+  --color-popover: #FFFFFF;
+  --color-popover-foreground: #0D0D0D;
+  --color-success: #7BC8A4;
+  --color-success-foreground: #0D0D0D;
+  --color-sidebar: #FFFFFF;
+  --radius-sm: 0.375rem;
   --radius-md: 0.5rem;
   --radius-lg: 0.75rem;
-  --font-sans: "Rubik", "Heebo", system-ui, sans-serif;
+  --font-sans: "Montserrat", system-ui, sans-serif;
 }
 
 @layer base {
@@ -41,5 +42,7 @@
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }

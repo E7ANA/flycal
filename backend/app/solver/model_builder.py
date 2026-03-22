@@ -41,6 +41,10 @@ class SolverData:
     teacher_max_work_days: dict[int, int] = field(default_factory=dict)
     # teacher_ids exempt from "must teach on meeting day" (management + counselors)
     meeting_day_exempt_ids: set[int] = field(default_factory=set)
+    # teacher_ids that are management team (is_management/principal/director/ped.coord)
+    management_teacher_ids: set[int] = field(default_factory=set)
+    # teacher_id -> transport_priority (prefer early finish)
+    transport_priorities: dict[int, int] = field(default_factory=dict)
     # Specific overlap pairs: set of ((type1, id1), (type2, id2)) — normalized
     allowed_overlap_pairs: set[tuple[tuple[str, int], tuple[str, int]]] = field(
         default_factory=set
@@ -167,6 +171,8 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
     teacher_rubrica_map: dict[int, float] = {}
     teacher_max_work_days: dict[int, int] = {}
     meeting_day_exempt_ids: set[int] = set()
+    management_teacher_ids: set[int] = set()
+    transport_priorities: dict[int, int] = {}
     if all_teacher_ids:
         teachers_with_blocks = (
             db.query(Teacher)
@@ -186,14 +192,19 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
             if t.max_work_days is not None:
                 teacher_max_work_days[t.id] = t.max_work_days
             # Management and counselors exempt from meeting-day teaching rule
-            if (
+            is_mgmt = (
                 getattr(t, "is_management", False)
                 or getattr(t, "is_principal", False)
                 or getattr(t, "is_director", False)
                 or getattr(t, "is_pedagogical_coordinator", False)
-                or getattr(t, "is_counselor", False)
-            ):
+            )
+            if is_mgmt or getattr(t, "is_counselor", False):
                 meeting_day_exempt_ids.add(t.id)
+            if is_mgmt:
+                management_teacher_ids.add(t.id)
+            tp = getattr(t, "transport_priority", None)
+            if tp is not None and tp > 0:
+                transport_priorities[t.id] = tp
 
     # Load MIN_FREE_DAYS constraints for brain integration
     from app.models.constraint import Constraint
@@ -258,6 +269,8 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
         teacher_rubrica_map=teacher_rubrica_map,
         teacher_max_work_days=teacher_max_work_days,
         meeting_day_exempt_ids=meeting_day_exempt_ids,
+        management_teacher_ids=management_teacher_ids,
+        transport_priorities=transport_priorities,
         min_free_days_map=min_free_days_map,
         allowed_overlap_pairs=allowed_overlap_pairs,
         grade_periods_map=grade_periods_map,

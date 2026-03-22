@@ -192,6 +192,20 @@ export default function ResultsPage() {
     setViewTargetId(sortedTeachers[newIdx].id);
   };
 
+  // Arrow navigation for classes
+  const sortedClasses = [...classes].sort((a, b) => a.name.localeCompare(b.name, "he"));
+  const currentClassIndex = sortedClasses.findIndex((c) => c.id === viewTargetId);
+  const handlePrevClass = () => {
+    if (!sortedClasses.length) return;
+    const newIdx = currentClassIndex <= 0 ? sortedClasses.length - 1 : currentClassIndex - 1;
+    setViewTargetId(sortedClasses[newIdx].id);
+  };
+  const handleNextClass = () => {
+    if (!sortedClasses.length) return;
+    const newIdx = currentClassIndex >= sortedClasses.length - 1 ? 0 : currentClassIndex + 1;
+    setViewTargetId(sortedClasses[newIdx].id);
+  };
+
   const meetingMap = Object.fromEntries(
     meetings.map((m) => [m.id, { id: m.id, name: m.name, color: m.color }]),
   );
@@ -486,135 +500,7 @@ export default function ResultsPage() {
             </Card>
           )}
 
-          {/* Solution Summary */}
-          {solutionSummary && <SolutionSummaryCard summary={solutionSummary} />}
-
-          {/* Violations */}
-          {scoreBreakdown?.violations?.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <AlertTriangle className="h-5 w-5 text-amber-500" />
-                  חריגות ({scoreBreakdown.violations.length})
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                  {scoreBreakdown.violations.map(
-                    (
-                      v: {
-                        category: string;
-                        severity: string;
-                        message: string;
-                      },
-                      i: number,
-                    ) => (
-                      <div
-                        key={i}
-                        className="flex items-start gap-2 text-sm py-1 border-b border-muted last:border-0"
-                      >
-                        <Badge
-                          variant={
-                            v.severity === "חובה" ? "destructive" : "warning"
-                          }
-                          className="shrink-0 mt-0.5"
-                        >
-                          {v.severity}
-                        </Badge>
-                        <span>{v.message}</span>
-                      </div>
-                    ),
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Plenary Attendance */}
-          {plenaryAttendance.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Users className="h-5 w-5 text-rose-400" />
-                  ישיבת מליאה
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {plenaryAttendance.map((pa) => (
-                  <div key={pa.meeting_id} className="space-y-3">
-                    <div className="flex items-center gap-3">
-                      <span className="font-medium">{pa.meeting_name}</span>
-                      <Badge variant="outline">
-                        {pa.plenary_days.map((d) => DAY_LABELS[d] ?? d).join(", ")}
-                      </Badge>
-                      <Badge variant="success">
-                        {pa.attending_count}/{pa.total_teachers} נוכחים
-                      </Badge>
-                    </div>
-
-                    {pa.preferred_attending.length > 0 && (
-                      <div>
-                        <span className="text-xs font-medium text-emerald-700 mb-1 block">
-                          <Check className="h-3 w-3 inline ml-1" />
-                          נוכחות מועדפת — נוכחים ({pa.preferred_attending.length})
-                        </span>
-                        <div className="flex flex-wrap gap-1">
-                          {pa.preferred_attending.map((t) => (
-                            <Badge key={t.id} className="text-xs bg-emerald-100 text-emerald-800 border-emerald-300" variant="outline">
-                              {t.name}
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {pa.preferred_absent.length > 0 && (
-                      <div>
-                        <span className="text-xs font-medium text-orange-600 mb-1 block">
-                          <X className="h-3 w-3 inline ml-1" />
-                          נוכחות מועדפת — לא נוכחים ({pa.preferred_absent.length})
-                        </span>
-                        <div className="flex flex-wrap gap-1">
-                          {pa.preferred_absent.map((t) => (
-                            <Badge key={t.id} className="text-xs bg-orange-50 text-orange-700 border-orange-200" variant="outline">
-                              {t.name}
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Trade-off analysis */}
-                    {pa.tradeoffs && pa.tradeoffs.length > 0 && (
-                      <div className="rounded-md border border-indigo-200 bg-indigo-50/40 p-3 space-y-2">
-                        <span className="text-xs font-semibold text-indigo-800 block">
-                          ניתוח מה-אם: שחרור מורה נעול/ה יכול להוסיף נוכחים
-                        </span>
-                        {pa.tradeoffs.map((tf) => (
-                          <div key={tf.locked_teacher.id} className="text-xs border-t border-indigo-200 pt-2">
-                            <span className="text-indigo-900">
-                              אם <strong>{tf.locked_teacher.name}</strong> לא הייתה נעולה →
-                              מליאה ביום <strong>{tf.potential_day_label}</strong> →
-                              {" "}<strong className="text-emerald-700">+{tf.gained_count}</strong> מורים נוספים:
-                            </span>
-                            <div className="flex flex-wrap gap-1 mt-1">
-                              {tf.gained_teachers.map((gt) => (
-                                <Badge key={gt.id} className="text-xs bg-emerald-50 text-emerald-700 border-emerald-300" variant="outline">
-                                  {gt.name}
-                                </Badge>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Timetable View */}
+          {/* Timetable View — shown FIRST */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -623,7 +509,7 @@ export default function ResultsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <Select
                   className="w-40"
                   value={viewMode}
@@ -650,38 +536,86 @@ export default function ResultsPage() {
                 </Select>
 
                 {viewMode === "teacher" && (
-                  <div
-                    className="flex items-center gap-1 flex-1 border rounded-md px-2 py-1"
-                    dir="ltr"
-                  >
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 shrink-0"
-                      onClick={handlePrevTeacher}
-                      disabled={!sortedTeachers.length}
+                  <>
+                    <Select
+                      className="flex-1"
+                      value={viewTargetId ?? ""}
+                      onChange={(e) =>
+                        setViewTargetId(e.target.value ? Number(e.target.value) : null)
+                      }
                     >
-                      <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <span className="flex-1 text-center text-sm font-medium truncate">
-                      {sortedTeachers.find((t) => t.id === viewTargetId)?.name ?? "בחר מורה"}
-                    </span>
-                    <span className="text-xs text-muted-foreground shrink-0">
-                      {currentTeacherIndex >= 0 ? `${currentTeacherIndex + 1}/${sortedTeachers.length}` : ""}
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 shrink-0"
-                      onClick={handleNextTeacher}
-                      disabled={!sortedTeachers.length}
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </Button>
-                  </div>
+                      <option value="">בחר מורה</option>
+                      {sortedTeachers.map((t) => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </Select>
+                    <div className="flex items-center gap-0.5" dir="ltr">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0"
+                        onClick={handlePrevTeacher}
+                        disabled={!sortedTeachers.length}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </Button>
+                      <span className="text-xs text-muted-foreground shrink-0 min-w-[2.5rem] text-center">
+                        {currentTeacherIndex >= 0 ? `${currentTeacherIndex + 1}/${sortedTeachers.length}` : ""}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0"
+                        onClick={handleNextTeacher}
+                        disabled={!sortedTeachers.length}
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </>
                 )}
 
-                {(viewMode === "class" || viewMode === "subject") && (
+                {viewMode === "class" && (
+                  <>
+                    <Select
+                      className="flex-1"
+                      value={viewTargetId ?? ""}
+                      onChange={(e) =>
+                        setViewTargetId(e.target.value ? Number(e.target.value) : null)
+                      }
+                    >
+                      <option value="">בחר כיתה</option>
+                      {sortedClasses.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </Select>
+                    <div className="flex items-center gap-0.5" dir="ltr">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0"
+                        onClick={handlePrevClass}
+                        disabled={!sortedClasses.length}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </Button>
+                      <span className="text-xs text-muted-foreground shrink-0 min-w-[2.5rem] text-center">
+                        {currentClassIndex >= 0 ? `${currentClassIndex + 1}/${sortedClasses.length}` : ""}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0"
+                        onClick={handleNextClass}
+                        disabled={!sortedClasses.length}
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </>
+                )}
+
+                {viewMode === "subject" && (
                   <Select
                     className="flex-1"
                     value={viewTargetId ?? ""}
@@ -691,10 +625,8 @@ export default function ResultsPage() {
                       )
                     }
                   >
-                    <option value="">
-                      בחר {viewMode === "class" ? "כיתה" : "מקצוע"}
-                    </option>
-                    {(viewMode === "class" ? classes : subjects).map((item) => (
+                    <option value="">בחר מקצוע</option>
+                    {subjects.map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.name}
                       </option>
@@ -703,7 +635,7 @@ export default function ResultsPage() {
                 )}
               </div>
 
-              {/* Meetings view — no target needed */}
+              {/* Meetings view */}
               {viewMode === "meetings" && allScheduledMeetings.length > 0 && (
                 <TimetableGrid
                   lessons={[]}
@@ -798,6 +730,142 @@ export default function ResultsPage() {
               )}
             </CardContent>
           </Card>
+
+          {/* Solution Summary */}
+          {solutionSummary && <SolutionSummaryCard summary={solutionSummary} />}
+
+          {/* Violations */}
+          {scoreBreakdown?.violations?.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5 text-amber-500" />
+                  חריגות ({scoreBreakdown.violations.length})
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                  {scoreBreakdown.violations.map(
+                    (
+                      v: {
+                        category: string;
+                        severity: string;
+                        message: string;
+                      },
+                      i: number,
+                    ) => (
+                      <div
+                        key={i}
+                        className="flex items-start gap-2 text-sm py-1 border-b border-muted last:border-0"
+                      >
+                        <Badge
+                          variant={
+                            v.severity === "חובה" ? "destructive" : "warning"
+                          }
+                          className="shrink-0 mt-0.5"
+                        >
+                          {v.severity}
+                        </Badge>
+                        <span>{v.message}</span>
+                      </div>
+                    ),
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Plenary Attendance */}
+          {plenaryAttendance.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="h-5 w-5 text-rose-400" />
+                  ישיבת מליאה
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {plenaryAttendance.map((pa) => (
+                  <div key={pa.meeting_id} className="space-y-3">
+                    <div className="flex items-center gap-3">
+                      <span className="font-medium">{pa.meeting_name}</span>
+                      <Badge variant="outline">
+                        {pa.plenary_days.map((d) => DAY_LABELS[d] ?? d).join(", ")}
+                      </Badge>
+                      <Badge variant="success">
+                        {pa.attending_count}/{pa.total_teachers} נוכחים
+                      </Badge>
+                    </div>
+
+                    {/* All attending teachers (mandatory + preferred) */}
+                    {(() => {
+                      const allAttending = [
+                        ...pa.mandatory_teachers,
+                        ...pa.preferred_attending,
+                      ];
+                      return allAttending.length > 0 ? (
+                        <div>
+                          <span className="text-xs font-medium text-emerald-700 mb-1 block">
+                            <Check className="h-3 w-3 inline ml-1" />
+                            נוכחים ({allAttending.length})
+                          </span>
+                          <div className="flex flex-wrap gap-1">
+                            {allAttending.map((t) => (
+                              <Badge key={t.id} className="text-xs bg-emerald-100 text-emerald-800 border-emerald-300" variant="outline">
+                                {t.name}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null;
+                    })()}
+
+                    {pa.preferred_absent.length > 0 && (
+                      <div>
+                        <span className="text-xs font-medium text-orange-600 mb-1 block">
+                          <X className="h-3 w-3 inline ml-1" />
+                          נוכחות מועדפת — לא נוכחים ({pa.preferred_absent.length})
+                        </span>
+                        <div className="flex flex-wrap gap-1">
+                          {pa.preferred_absent.map((t) => (
+                            <Badge key={t.id} className="text-xs bg-orange-50 text-orange-700 border-orange-200" variant="outline">
+                              {t.name}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Trade-off analysis */}
+                    {pa.tradeoffs && pa.tradeoffs.length > 0 && (
+                      <div className="rounded-md border border-indigo-200 bg-indigo-50/40 p-3 space-y-2">
+                        <span className="text-xs font-semibold text-indigo-800 block">
+                          ניתוח מה-אם: שחרור מורה נעול/ה יכול להוסיף נוכחים
+                        </span>
+                        {pa.tradeoffs.map((tf) => (
+                          <div key={tf.locked_teacher.id} className="text-xs border-t border-indigo-200 pt-2">
+                            <span className="text-indigo-900">
+                              אם <strong>{tf.locked_teacher.name}</strong> לא הייתה נעולה →
+                              מליאה ביום <strong>{tf.potential_day_label}</strong> →
+                              {" "}<strong className="text-emerald-700">+{tf.gained_count}</strong> מורים נוספים:
+                            </span>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {tf.gained_teachers.map((gt) => (
+                                <Badge key={gt.id} className="text-xs bg-emerald-50 text-emerald-700 border-emerald-300" variant="outline">
+                                  {gt.name}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+
         </>
       )}
 

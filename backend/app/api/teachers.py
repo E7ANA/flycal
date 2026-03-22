@@ -27,6 +27,7 @@ def _teacher_to_read(teacher: Teacher) -> TeacherRead:
         is_principal=teacher.is_principal,
         is_pedagogical_coordinator=teacher.is_pedagogical_coordinator,
         is_director=teacher.is_director,
+        transport_priority=teacher.transport_priority,
         blocked_slots=teacher.blocked_slots or [],
     )
 

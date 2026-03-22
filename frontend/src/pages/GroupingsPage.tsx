@@ -1266,7 +1266,7 @@ function SubjectFormDialog({
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState(subject?.name ?? "");
-  const [color, setColor] = useState(subject?.color ?? "#5ba8d4");
+  const [color, setColor] = useState(subject?.color ?? "#1B365D");
   const [alwaysDouble, setAlwaysDouble] = useState(subject?.always_double ?? false);
   const [limitLastPeriods, setLimitLastPeriods] = useState(subject?.limit_last_periods ?? false);
   const [doublePriority, setDoublePriority] = useState<string>(

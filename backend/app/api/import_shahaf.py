@@ -556,7 +556,10 @@ def _do_import(data: ImportRequest, db: Session):
             existing.name = name
             existing.max_hours_per_week = t.get("frontal_hours") or t.get("total_hours") or 0
             existing.rubrica_hours = t.get("target_hours") or t.get("total_hours") or None
-            existing.blocked_slots = blocked_slots if blocked_slots else None
+            # Only overwrite blocked_slots if Shahaf provides actual blocking data.
+            # Otherwise preserve manually-set free days — don't clear them on re-import.
+            if blocked_slots:
+                existing.blocked_slots = blocked_slots
             existing.is_coordinator = "רכזת" in roles_str or "רכז" in roles_str
             existing.is_management = "הנהלה" in roles_str
             existing.is_counselor = "יועצת" in roles_str or "יועץ" in roles_str

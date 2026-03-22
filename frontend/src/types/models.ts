@@ -50,6 +50,7 @@ export interface Teacher {
   is_principal: boolean;
   is_pedagogical_coordinator: boolean;
   is_director: boolean;
+  transport_priority: number | null;
   blocked_slots: BlockedSlot[];
 }
 

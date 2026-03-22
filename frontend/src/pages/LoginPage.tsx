@@ -27,11 +27,11 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-muted/30">
-      <div className="w-full max-w-sm bg-card rounded-xl shadow-lg border p-8">
+    <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="w-full max-w-sm bg-card rounded-xl shadow-sm border p-8">
         <div className="flex items-center justify-center gap-3 mb-2">
-          <img src="/flycal.svg" alt="flycal" className="h-5 w-5" />
-          <h1 className="text-3xl font-bold text-primary tracking-wide">flycal</h1>
+          <img src="/logiclass.svg" alt="logiclass" className="h-7 w-7" />
+          <h1 className="text-3xl font-semibold text-foreground tracking-tight">logiclass</h1>
         </div>
         <p className="text-muted-foreground text-center text-sm mb-6">
           התחברות למערכת

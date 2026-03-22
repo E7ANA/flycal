@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Pencil, School, Users, Shield, ShieldCheck } from "lucide-react";
+import { Plus, Trash2, Pencil, School, Users, Shield, ShieldCheck, ExternalLink } from "lucide-react";
 import toast from "react-hot-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/common/Card";
 import { Button } from "@/components/common/Button";
@@ -27,6 +28,7 @@ import { useAuthStore, type AuthUser } from "@/stores/authStore";
 // ─── Schools Section ───
 
 function SchoolsSection() {
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const { data: schools } = useQuery({
     queryKey: ["schools"],
@@ -129,6 +131,14 @@ function SchoolsSection() {
                     <td className="px-3 py-2">{s.days_per_week}</td>
                     <td className="px-3 py-2">{s.periods_per_day}</td>
                     <td className="px-3 py-2 flex gap-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => navigate(`/?sid=${s.id}`)}
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        כניסה
+                      </Button>
                       <Button
                         variant="ghost"
                         size="sm"

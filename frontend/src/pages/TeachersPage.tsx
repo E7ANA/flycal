@@ -207,6 +207,9 @@ function TeacherFormDialog({
   const [isDirector, setIsDirector] = useState(
     teacher?.is_director ?? false,
   );
+  const [transportPriority, setTransportPriority] = useState<string>(
+    teacher?.transport_priority != null ? String(teacher.transport_priority) : "",
+  );
   const [blockedSlots, setBlockedSlots] = useState<BlockedSlot[]>(
     teacher?.blocked_slots ?? [],
   );
@@ -251,6 +254,7 @@ function TeacherFormDialog({
         is_principal: isPrincipal,
         is_pedagogical_coordinator: isPedagogicalCoordinator,
         is_director: isDirector,
+        transport_priority: transportPriority !== "" ? Number(transportPriority) : null,
         blocked_slots: blockedSlots,
       }),
     onSuccess: () => {
@@ -277,6 +281,7 @@ function TeacherFormDialog({
         is_principal: isPrincipal,
         is_pedagogical_coordinator: isPedagogicalCoordinator,
         is_director: isDirector,
+        transport_priority: transportPriority !== "" ? Number(transportPriority) : null,
         blocked_slots: blockedSlots,
       }),
     onSuccess: () => {
@@ -438,6 +443,18 @@ function TeacherFormDialog({
               />
               <span className="text-sm">מנהלת</span>
             </label>
+            <div>
+              <Label htmlFor="transport-priority">עדיפות יום מוקדם (1-100, ריק = ללא)</Label>
+              <Input
+                id="transport-priority"
+                type="number"
+                min={0}
+                max={100}
+                value={transportPriority}
+                onChange={(e) => setTransportPriority(e.target.value)}
+                placeholder="ללא"
+              />
+            </div>
             <div>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
@@ -641,7 +658,7 @@ export default function TeachersPage() {
         searchable
         searchPlaceholder="חיפוש מורה..."
         keyField="id"
-        data={teachers}
+        data={[...teachers].sort((a, b) => a.name.localeCompare(b.name, "he"))}
         columns={[
           { header: "שם", accessor: "name" },
           {
@@ -699,6 +716,9 @@ export default function TeachersPage() {
                 {t.is_principal && <Badge variant="outline">מנהלת ב״ס</Badge>}
                 {t.is_pedagogical_coordinator && <Badge variant="outline">רכזת פדגוגית</Badge>}
                 {t.is_director && <Badge variant="outline">מנהלת</Badge>}
+                {t.transport_priority != null && t.transport_priority > 0 && (
+                  <Badge variant="outline">יום מוקדם</Badge>
+                )}
               </div>
             ),
           },
@@ -766,6 +786,45 @@ export default function TeachersPage() {
                 ))}
               </div>
             ),
+          },
+          {
+            header: "יום מוקדם",
+            accessor: (t) => {
+              const val = t.transport_priority;
+              return (
+                <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                  {val != null && val > 0 ? (
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      className="w-12 rounded border bg-background px-1 py-0.5 text-sm text-center"
+                      value={val}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        updateTeacher(t.id, {
+                          transport_priority: v !== "" && Number(v) > 0 ? Number(v) : null,
+                        }).then(() =>
+                          qc.invalidateQueries({ queryKey: ["teachers", schoolId] }),
+                        );
+                      }}
+                    />
+                  ) : (
+                    <button
+                      className="text-xs text-primary hover:underline cursor-pointer"
+                      onClick={() => {
+                        updateTeacher(t.id, { transport_priority: 70 }).then(() =>
+                          qc.invalidateQueries({ queryKey: ["teachers", schoolId] }),
+                        );
+                      }}
+                    >
+                      + הוסף
+                    </button>
+                  )}
+                </div>
+              );
+            },
+            className: "w-20",
           },
           {
             header: "פעולות",

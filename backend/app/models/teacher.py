@@ -35,6 +35,9 @@ class Teacher(Base):
     is_pedagogical_coordinator: Mapped[bool] = mapped_column(Boolean, default=False)
     is_director: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Transport: prefer early finish (0/null = off, higher = stronger preference)
+    transport_priority: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+
     # Blocked timeslots: [{"day": "SUNDAY", "period": 3}, ...]
     blocked_slots: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
     # External ID from Shahaf system (for roundtrip export)
