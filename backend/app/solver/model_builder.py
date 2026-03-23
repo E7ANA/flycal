@@ -357,7 +357,6 @@ def add_system_constraints(
     _add_meetings_on_teaching_days(model, data, variables)
     _add_teacher_blocked_slots(model, data, variables)
     _add_homeroom_must_teach_sunday(model, data, variables)
-    _add_secondary_track_end_of_day(model, data, variables)
     _add_pinned_lessons(model, data, variables)
     _add_pinned_meetings(model, data, variables)
     _add_pinned_tracks(model, data, variables)
@@ -536,7 +535,7 @@ def _add_class_no_overlap(
 
                 serving_vars: list[cp_model.IntVar] = []
                 for track in cluster.tracks:
-                    if track.teacher_id is None or track.is_secondary:
+                    if track.teacher_id is None:
                         continue
                     if (track.source_class_id is not None
                             and track.source_class_id != class_id):
@@ -642,21 +641,20 @@ def _add_grouping_sync(
     model: cp_model.CpModel, data: SolverData, variables: SolverVariables
 ) -> None:
     for cluster in data.clusters:
-        # Secondary tracks are NOT synced with the grouping — they schedule independently.
         # Linked tracks (link_group with 2+ tracks) represent tracks attended by the
         # SAME students at different times. Individually they must NOT be synced, but
         # collectively (as a group) they must participate in sync so that the grouping
         # timeslots overlap correctly across classes.
         link_groups: dict[int, list] = {}
         for t in cluster.tracks:
-            if t.link_group is not None and t.teacher_id is not None and not t.is_secondary:
+            if t.link_group is not None and t.teacher_id is not None:
                 link_groups.setdefault(t.link_group, []).append(t)
 
         # Build sync participants: regular tracks + virtual linked groups
         participants: list[_SyncParticipant] = []
 
         for t in cluster.tracks:
-            if t.teacher_id is None or t.is_secondary:
+            if t.teacher_id is None:
                 continue
             if t.link_group is not None and len(link_groups.get(t.link_group, [])) >= 2:
                 continue  # Will be represented by virtual group
@@ -1129,33 +1127,7 @@ def _add_homeroom_must_teach_sunday(
 
 
 # ---------------------------------------------------------------------------
-# System Constraint 10: Secondary Track End-of-Day Preference
-# Secondary tracks (מגמה שניה) are preferred at the end of the school day.
-# ---------------------------------------------------------------------------
-def _add_secondary_track_end_of_day(
-    model: cp_model.CpModel, data: SolverData, variables: SolverVariables
-) -> None:
-    for cluster in data.clusters:
-        for track in cluster.tracks:
-            if not track.is_secondary or track.teacher_id is None:
-                continue
-            # Soft penalty: penalize earlier periods more heavily
-            for day in data.days:
-                max_p = data.max_period_per_day.get(day, 8)
-                for period in range(1, max_p + 1):
-                    tk = (track.id, day, period)
-                    if tk in variables.x_track:
-                        # Penalty proportional to how early the period is
-                        # Earlier period = higher penalty
-                        penalty_weight = max_p - period
-                        if penalty_weight > 0:
-                            variables.penalties.append(
-                                (variables.x_track[tk], penalty_weight, -1)
-                            )
-
-
-# ---------------------------------------------------------------------------
-# System Constraint 11: Pinned Lessons
+# System Constraint 10: Pinned Lessons
 # Lessons pinned to specific timeslots must be scheduled exactly there.
 # ---------------------------------------------------------------------------
 def _add_pinned_lessons(

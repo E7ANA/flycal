@@ -28,7 +28,6 @@ ALL_EXCEPT = [
     mb._add_meeting_hours_fulfillment,
     # skip meetings_on_teaching_days
     mb._add_teacher_blocked_slots,
-    mb._add_secondary_track_end_of_day,
     mb._add_pinned_lessons,
     mb._add_pinned_meetings,
     mb._add_pinned_tracks,

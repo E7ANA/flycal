@@ -64,41 +64,14 @@ HEADER_FONT_DARK = Font(bold=True, size=11, name="Calibri", color="333333")
 PERIOD_FONT = Font(bold=True, size=11, name="Calibri", color="555555")
 
 
-_COLOR_KEY_BG = {
-    "coral": "#FDE8E4",
-    "purple": "#EDE5F5",
-    "teal": "#E8F0ED",
-    "success": "#E8F1E4",
-    "warning": "#FBF0E0",
-    "error": "#FAE0E4",
-    "blue": "#DEEAF6",
-}
-
-_HEX_TO_KEY = {
-    "#ef4444": "error", "#e11d48": "error", "#f43f5e": "error",
-    "#dc2626": "error", "#c4342d": "error",
-    "#ec4899": "coral", "#f97316": "coral", "#fb923c": "coral",
-    "#8b5cf6": "purple", "#6366f1": "purple", "#7c3aed": "purple",
-    "#a855f7": "purple", "#d946ef": "purple",
-    "#10b981": "success", "#84cc16": "success", "#14b8a6": "success",
-    "#2dd4bf": "teal", "#06b6d4": "teal", "#22d3ee": "teal", "#0ea5e9": "teal",
-    "#f59e0b": "warning",
-    "#3b82f6": "blue", "#1b365d": "blue",
-}
+from app.utils.colors import resolve_color_bg
 
 
 def _hex_to_fill(hex_color: str) -> PatternFill | None:
     """Convert a color key or legacy hex to an openpyxl PatternFill."""
-    # Resolve color key to hex bg
-    if hex_color in _COLOR_KEY_BG:
-        hex_color = _COLOR_KEY_BG[hex_color]
-    else:
-        # Legacy hex → key → bg
-        mapped = _HEX_TO_KEY.get(hex_color.lower())
-        if mapped:
-            hex_color = _COLOR_KEY_BG[mapped]
+    bg = resolve_color_bg(hex_color)
     try:
-        h = hex_color.lstrip("#")
+        h = bg.lstrip("#")
         if len(h) == 6:
             return PatternFill("solid", fgColor=f"FF{h.upper()}")
     except Exception:

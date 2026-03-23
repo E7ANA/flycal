@@ -70,6 +70,7 @@ class ScheduledMeeting(Base):
     period: Mapped[int] = mapped_column(Integer)
 
     solution: Mapped["Solution"] = relationship(back_populates="scheduled_meetings")
+    meeting: Mapped["Meeting"] = relationship()
 
 
 class AllowedOverlap(Base):
@@ -88,3 +89,6 @@ class AllowedOverlap(Base):
     item1_id: Mapped[int] = mapped_column(Integer)
     item2_type: Mapped[str] = mapped_column(String(20))
     item2_id: Mapped[int] = mapped_column(Integer)
+
+
+from app.models.meeting import Meeting  # noqa: E402, F401

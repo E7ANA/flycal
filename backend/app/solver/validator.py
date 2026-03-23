@@ -83,6 +83,7 @@ def validate(data: SolverData) -> list[ValidationIssue]:
     issues.extend(_check_meeting_data(data, n))
     issues.extend(_check_cluster_teacher_availability(data, n))
     issues.extend(_check_pinned_slots(data, n))
+    issues.extend(_check_meeting_days_vs_work_days(data, n))
     return issues
 
 
@@ -569,5 +570,93 @@ def _check_pinned_slots(data: SolverData, n: _Names) -> list[ValidationIssue]:
                     ),
                     details={"class_id": cid, "requirement_ids": unique_sources},
                 ))
+
+    return issues
+
+
+def _check_meeting_days_vs_work_days(
+    data: SolverData, n: _Names,
+) -> list[ValidationIssue]:
+    """Detect teachers whose pinned meeting days exceed their max work days.
+
+    This is the #1 source of infeasibility: if a teacher has max_work_days=2
+    but mandatory pinned meetings on 3 different days, the model is infeasible.
+    """
+    from app.solver.brain import _max_days_for_rubrica, _compute_teacher_frontal
+
+    issues: list[ValidationIssue] = []
+    total_days = len(data.days)
+
+    # Compute frontal hours and max_work_days per teacher (same logic as brain)
+    teacher_frontal = _compute_teacher_frontal(data)
+
+    # Collect pinned meeting days per teacher
+    teacher_pinned_meeting_days: dict[int, set[str]] = {}
+    for meeting in data.meetings:
+        pinned = getattr(meeting, "pinned_slots", None)
+        if not pinned:
+            continue
+        pinned_days: set[str] = set()
+        for pin in pinned:
+            d = pin.get("day") if isinstance(pin, dict) else getattr(pin, "day", None)
+            if d is not None:
+                pinned_days.add(d)
+        if not pinned_days:
+            continue
+        for teacher in meeting.teachers:
+            teacher_pinned_meeting_days.setdefault(teacher.id, set()).update(pinned_days)
+
+    for t_id, pinned_days in teacher_pinned_meeting_days.items():
+        frontal = teacher_frontal.get(t_id, 0)
+        if frontal <= 0:
+            continue
+
+        max_days: int | None = None
+        source = ""
+
+        # Same priority logic as brain._apply_max_days_by_frontal
+        manual = data.teacher_max_work_days.get(t_id)
+        if manual is not None and manual > 0:
+            max_days = manual
+            source = "ידני"
+        else:
+            rubrica = data.teacher_rubrica_map.get(t_id)
+            if rubrica is not None and rubrica > 0:
+                max_days = _max_days_for_rubrica(rubrica)
+                if max_days is not None:
+                    source = f"רובריקה ({rubrica})"
+                    if frontal > 16 and max_days < 4:
+                        max_days = 4
+            if max_days is None and frontal < 12:
+                max_days = 2
+                source = f"פרונטלי ({frontal} שעות)"
+
+        if max_days is None:
+            continue
+
+        # Apply MIN_FREE_DAYS cap
+        min_free = data.min_free_days_map.get(t_id, 0)
+        if min_free > 0:
+            max_days = min(max_days, total_days - min_free)
+
+        num_meeting_days = len(pinned_days)
+        if num_meeting_days > max_days:
+            day_names = ", ".join(sorted(_day(d) for d in pinned_days))
+            issues.append(ValidationIssue(
+                level="error",
+                category="capacity",
+                message=(
+                    f"מורה {n.t(t_id)}: ישיבות מוצמדות ב-{num_meeting_days} ימים "
+                    f"({day_names}) אך מגבלת ימי עבודה = {max_days} "
+                    f"(מקור: {source}). "
+                    f"יש להפחית ימי ישיבה או להגדיל ימי עבודה."
+                ),
+                details={
+                    "teacher_id": t_id,
+                    "pinned_meeting_days": sorted(pinned_days),
+                    "max_work_days": max_days,
+                    "source": source,
+                },
+            ))
 
     return issues

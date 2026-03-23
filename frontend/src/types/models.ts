@@ -105,7 +105,6 @@ export interface Track {
   cluster_id: number;
   teacher_id: number | null;
   hours_per_week: number;
-  is_secondary: boolean;
   requirement_id: number | null;
   link_group: number | null;
   source_class_id: number | null;
@@ -171,7 +170,6 @@ export type RuleType =
   | "MAX_GAPS_PER_WEEK"
   | "SYNC_TRACKS"
   | "SYNC_TEACHER_CLASSES"
-  | "SECONDARY_TRACK_END_OF_DAY"
   | "GROUPING_EXTRA_AT_END"
   | "EARLY_FINISH"
   | "MINIMIZE_TEACHER_DAYS"

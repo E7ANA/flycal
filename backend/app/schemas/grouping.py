@@ -31,7 +31,6 @@ class TrackSummary(BaseModel):
     name: str
     teacher_id: int | None
     hours_per_week: int
-    is_secondary: bool
 
     model_config = {"from_attributes": True}
 
@@ -61,7 +60,6 @@ class TrackCreate(BaseModel):
     cluster_id: int
     teacher_id: int | None = None
     hours_per_week: int
-    is_secondary: bool = False
     pinned_slots: list[PinnedSlot] | None = None
     blocked_slots: list[PinnedSlot] | None = None
     allow_overlap: bool = False
@@ -71,7 +69,6 @@ class TrackUpdate(BaseModel):
     name: str | None = None
     teacher_id: int | None = None
     hours_per_week: int | None = None
-    is_secondary: bool | None = None
     link_group: int | None = None
     source_class_id: int | None = None
     pinned_slots: list[PinnedSlot] | None = None
@@ -85,7 +82,6 @@ class TrackRead(BaseModel):
     cluster_id: int
     teacher_id: int | None
     hours_per_week: int
-    is_secondary: bool
     requirement_id: int | None = None
     link_group: int | None = None
     source_class_id: int | None = None

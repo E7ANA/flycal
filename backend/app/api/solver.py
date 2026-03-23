@@ -1209,7 +1209,7 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
         # Track which teacher+slot combos we've already added
         seen: set[tuple[int, str, int]] = set()
         for track in cluster.tracks:
-            if track.teacher_id is None or getattr(track, "is_secondary", False):
+            if track.teacher_id is None:
                 continue
             label = f"רצועה '{track.name}' ({cluster.name}, {track.hours_per_week}ש)"
             for day, period in inherited:

@@ -58,7 +58,6 @@ def _cluster_to_read(cluster: GroupingCluster) -> GroupingClusterRead:
                 name=t.name,
                 teacher_id=t.teacher_id,
                 hours_per_week=t.hours_per_week,
-                is_secondary=t.is_secondary,
             )
             for t in cluster.tracks
         ],
@@ -473,7 +472,7 @@ def get_track_available_slots(track_id: int, db: Session = Depends(get_db)):
     )
     cluster_teacher_ids = {
         t.teacher_id for t in cluster_tracks
-        if t.teacher_id is not None and not t.is_secondary
+        if t.teacher_id is not None
     }
     for tid in cluster_teacher_ids:
         teacher = db.get(Teacher, tid)

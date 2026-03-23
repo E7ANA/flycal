@@ -13,6 +13,7 @@ class SubjectCreate(BaseModel):
     is_hidden: bool = False
     link_group: str | None = None
     link_group_max_per_day: int | None = None
+    shahaf_id: str | None = None
 
 
 class SubjectUpdate(BaseModel):
@@ -26,6 +27,7 @@ class SubjectUpdate(BaseModel):
     is_hidden: bool | None = None
     link_group: str | None = None
     link_group_max_per_day: int | None = None
+    shahaf_id: str | None = None
 
 
 class SubjectRead(BaseModel):
@@ -41,6 +43,7 @@ class SubjectRead(BaseModel):
     is_hidden: bool = False
     link_group: str | None = None
     link_group_max_per_day: int | None = None
+    shahaf_id: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -68,6 +71,7 @@ class SubjectRequirementCreate(BaseModel):
     morning_priority: int | None = None
     allow_overlap: bool = False
     is_hidden: bool = False
+    shahaf_id: str | None = None
 
 
 class SubjectRequirementUpdate(BaseModel):
@@ -85,6 +89,7 @@ class SubjectRequirementUpdate(BaseModel):
     morning_priority: int | None = None
     allow_overlap: bool | None = None
     is_hidden: bool | None = None
+    shahaf_id: str | None = None
 
 
 class SubjectRequirementRead(BaseModel):
@@ -106,5 +111,6 @@ class SubjectRequirementRead(BaseModel):
     morning_priority: int | None
     allow_overlap: bool
     is_hidden: bool = False
+    shahaf_id: str | None = None
 
     model_config = {"from_attributes": True}

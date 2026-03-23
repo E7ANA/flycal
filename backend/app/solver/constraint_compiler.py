@@ -4,6 +4,7 @@ For HARD constraints: adds model.add(...) directly.
 For SOFT constraints: creates penalty variables and appends to objective terms.
 """
 
+import logging
 from types import SimpleNamespace
 
 from ortools.sat.python import cp_model
@@ -11,6 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.models.constraint import Constraint, ConstraintType, RuleType
 from app.solver.model_builder import SolverData, SolverVariables
+
+logger = logging.getLogger(__name__)
 
 # Cache for cluster consecutive counts (populated lazily in compile_all_constraints)
 _cluster_consecutive_counts: dict[int, int] = {}
@@ -101,9 +104,21 @@ def _compile_one(
     constraint,
 ) -> None:
     """Dispatch to the correct compiler function based on rule_type."""
-    compiler = _COMPILERS.get(RuleType(constraint.rule_type))
+    try:
+        rt = RuleType(constraint.rule_type)
+    except ValueError:
+        logger.warning(
+            "Constraint #%s (%s): unknown rule_type '%s' — skipped",
+            constraint.id, constraint.name, constraint.rule_type,
+        )
+        return
+    compiler = _COMPILERS.get(rt)
     if compiler is None:
-        return  # Unknown rule_type — skip silently
+        logger.warning(
+            "Constraint #%s (%s): rule_type '%s' has no compiler — skipped",
+            constraint.id, constraint.name, constraint.rule_type,
+        )
+        return
     compiler(model, data, variables, constraint)
 
 
@@ -1505,75 +1520,6 @@ def _compile_short_days_flexible(
 
 
 # ---------------------------------------------------------------------------
-# SECONDARY_TRACK_END_OF_DAY
-# Secondary tracks must be contiguous and at the end of the school day.
-# HARD: consecutive hours ending at the last period.
-# SOFT: penalty proportional to how early each active hour is.
-# ---------------------------------------------------------------------------
-def _compile_secondary_track_end_of_day(
-    model: cp_model.CpModel, data: SolverData,
-    variables: SolverVariables, constraint: Constraint,
-) -> None:
-    target_cluster_id = constraint.target_id  # None means ALL clusters
-    is_hard = constraint.type == "HARD"
-
-    for cluster in data.clusters:
-        if target_cluster_id is not None and cluster.id != target_cluster_id:
-            continue
-
-        for track in cluster.tracks:
-            if not track.is_secondary or track.teacher_id is None:
-                continue
-
-            for day in data.days:
-                max_p = data.max_period_per_day.get(day, 8)
-                periods = sorted(
-                    p for p in range(1, max_p + 1)
-                    if (track.id, day, p) in variables.x_track
-                )
-                if not periods:
-                    continue
-
-                if is_hard:
-                    # 1) Contiguous suffix: if active at p, must be active at p+1
-                    #    i.e. x[p] <= x[p+1] for all consecutive periods
-                    for i in range(len(periods) - 1):
-                        p_curr = periods[i]
-                        p_next = periods[i + 1]
-                        k_curr = (track.id, day, p_curr)
-                        k_next = (track.id, day, p_next)
-                        model.add(
-                            variables.x_track[k_curr] <= variables.x_track[k_next]
-                        )
-
-                    # 2) End of day: if any hour active on this day,
-                    #    the last period must be active.
-                    day_vars = [
-                        variables.x_track[(track.id, day, p)]
-                        for p in periods
-                    ]
-                    last_k = (track.id, day, periods[-1])
-                    # If sum(day_vars) >= 1, then x_track[last] == 1
-                    has_any = model.new_bool_var(
-                        f"sec_eod_any_{constraint.id}_t{track.id}_{day}"
-                    )
-                    model.add(sum(day_vars) >= 1).only_enforce_if(has_any)
-                    model.add(sum(day_vars) == 0).only_enforce_if(has_any.negated())
-                    model.add(
-                        variables.x_track[last_k] == 1
-                    ).only_enforce_if(has_any)
-                else:
-                    # SOFT: penalty proportional to (max_p - period)
-                    for p in periods:
-                        penalty_weight = max_p - p
-                        if penalty_weight > 0:
-                            variables.penalties.append(
-                                (variables.x_track[(track.id, day, p)],
-                                 penalty_weight, constraint.id)
-                            )
-
-
-# ---------------------------------------------------------------------------
 # GROUPING_EXTRA_AT_END
 # In variable-hours groupings, extra hours (reference active, short inactive)
 # must be at the end of the day.
@@ -1594,7 +1540,7 @@ def _compile_grouping_extra_at_end(
 
         primary_tracks = [
             t for t in cluster.tracks
-            if t.teacher_id is not None and not t.is_secondary
+            if t.teacher_id is not None
         ]
         if len(primary_tracks) < 2:
             continue
@@ -2170,7 +2116,6 @@ _COMPILERS = {
     RuleType.TEACHER_FIRST_LAST_PREFERENCE: _compile_teacher_first_last_preference,
     RuleType.GRADE_ACTIVITY_HOURS: _compile_grade_activity_hours,
     RuleType.SHORT_DAYS_FLEXIBLE: _compile_short_days_flexible,
-    RuleType.SECONDARY_TRACK_END_OF_DAY: _compile_secondary_track_end_of_day,
     RuleType.GROUPING_EXTRA_AT_END: _compile_grouping_extra_at_end,
     RuleType.COMPACT_SCHOOL_DAY: _compile_compact_school_day,
     RuleType.HOMEROOM_EARLY: _compile_homeroom_early,

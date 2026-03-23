@@ -7,7 +7,6 @@ export interface TrackSummary {
   name: string;
   teacher_id: number | null;
   hours_per_week: number;
-  is_secondary: boolean;
 }
 
 export interface ClusterResponse {
@@ -91,7 +90,6 @@ export async function createTrack(payload: {
   cluster_id: number;
   teacher_id: number | null;
   hours_per_week: number;
-  is_secondary?: boolean;
 }): Promise<Track> {
   const { data } = await api.post<Track>("/tracks", payload);
   return data;
@@ -103,7 +101,6 @@ export async function updateTrack(
     name: string;
     teacher_id: number | null;
     hours_per_week: number;
-    is_secondary: boolean;
     link_group: number | null;
     source_class_id: number | null;
     pinned_slots: PinnedSlot[] | null;

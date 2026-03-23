@@ -41,6 +41,7 @@ const MEETING_TYPE_OPTIONS: { value: MeetingType; label: string }[] = [
   { value: "HOMEROOM", label: "מחנכות" },
   { value: "COORDINATORS", label: "רכזים" },
   { value: "MANAGEMENT", label: "ניהול" },
+  { value: "PLENARY", label: "מליאה" },
   { value: "CUSTOM", label: "מותאם אישית" },
 ];
 

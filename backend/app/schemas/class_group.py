@@ -7,6 +7,7 @@ class ClassGroupCreate(BaseModel):
     grade_id: int
     num_students: int = 0
     homeroom_daily_required: bool = False
+    shahaf_id: str | None = None
 
 
 class ClassGroupUpdate(BaseModel):
@@ -14,6 +15,7 @@ class ClassGroupUpdate(BaseModel):
     grade_id: int | None = None
     num_students: int | None = None
     homeroom_daily_required: bool | None = None
+    shahaf_id: str | None = None
 
 
 class ClassGroupRead(BaseModel):
@@ -23,5 +25,6 @@ class ClassGroupRead(BaseModel):
     grade_id: int
     num_students: int
     homeroom_daily_required: bool = False
+    shahaf_id: str | None = None
 
     model_config = {"from_attributes": True}

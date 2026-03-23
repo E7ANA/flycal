@@ -69,6 +69,11 @@ def parse_solution_from_snapshot(
             if not info:
                 continue
             cluster, track, served_class_ids, resolved_subject_id = info
+            # Guard against missing subject_id or teacher_id
+            if resolved_subject_id is None:
+                resolved_subject_id = cluster.subject_id
+            if resolved_subject_id is None or track.teacher_id is None:
+                continue  # Skip malformed track — can't create valid lesson
             # Create one entry per served class so each class "owns" the slot
             for cg_id in served_class_ids:
                 lessons.append(ScheduledLesson(

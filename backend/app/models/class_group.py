@@ -80,7 +80,6 @@ class Track(Base):
     cluster_id: Mapped[int] = mapped_column(ForeignKey("grouping_clusters.id"))
     teacher_id: Mapped[int | None] = mapped_column(ForeignKey("teachers.id"), nullable=True)
     hours_per_week: Mapped[int] = mapped_column(Integer)
-    is_secondary: Mapped[bool] = mapped_column(Boolean, default=False)
     requirement_id: Mapped[int | None] = mapped_column(
         ForeignKey("subject_requirements.id"), nullable=True
     )

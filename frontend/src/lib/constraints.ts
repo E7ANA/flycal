@@ -31,7 +31,6 @@ export const RULE_TYPE_LABELS: Record<RuleType, string> = {
   MAX_GAPS_PER_WEEK: "מקסימום חלונות בשבוע",
   SYNC_TRACKS: "סנכרון רצועות",
   SYNC_TEACHER_CLASSES: "סנכרון מורה-כיתות",
-  SECONDARY_TRACK_END_OF_DAY: "מגמה שניה בסוף יום (רצוף)",
   GROUPING_EXTRA_AT_END: "שעות נוספות בהקבצה בסוף יום",
   EARLY_FINISH: "סיום מוקדם",
   MINIMIZE_TEACHER_DAYS: "מינימום ימי מורה",
@@ -53,6 +52,15 @@ export const DAY_LABELS: Record<string, string> = {
   WEDNESDAY: "רביעי",
   THURSDAY: "חמישי",
   FRIDAY: "שישי",
+};
+
+export const DAY_LABELS_SHORT: Record<string, string> = {
+  SUNDAY: "א׳",
+  MONDAY: "ב׳",
+  TUESDAY: "ג׳",
+  WEDNESDAY: "ד׳",
+  THURSDAY: "ה׳",
+  FRIDAY: "ו׳",
 };
 
 export const DAYS_ORDER = [

@@ -488,7 +488,6 @@ function ParameterFields({
         </div>
       );
 
-    case "SECONDARY_TRACK_END_OF_DAY":
     case "GROUPING_EXTRA_AT_END":
       return null;
 

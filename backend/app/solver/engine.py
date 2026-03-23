@@ -447,8 +447,6 @@ def _check_pinned_conflicts(
         for track in cluster.tracks:
             if track.teacher_id is None:
                 continue
-            if getattr(track, "is_secondary", False):
-                continue
             source = f"רצועה '{track.name}' באשכול '{cluster.name}' (סנכרון)"
             for day, period in inherited_slots:
                 key = (track.teacher_id, day, period)
@@ -954,12 +952,11 @@ def _diagnose_infeasibility(
 
         # Check 3: Grouping clusters — overlapping teacher availability
         for cluster in data.clusters:
-            primary_tracks = [t for t in cluster.tracks if not getattr(t, "is_secondary", False)]
-            if len(primary_tracks) < 2:
+            if len(cluster.tracks) < 2:
                 continue
 
             # All tracks must be synced — check if teachers have enough common free slots
-            teacher_ids = [t.teacher_id for t in primary_tracks if t.teacher_id is not None]
+            teacher_ids = [t.teacher_id for t in cluster.tracks if t.teacher_id is not None]
             if len(teacher_ids) < 2:
                 continue
 

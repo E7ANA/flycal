@@ -75,7 +75,6 @@ const CLASS_RULES: { value: RuleType; label: string }[] = [
 ];
 
 const GROUPING_RULES: { value: RuleType; label: string }[] = [
-  { value: "SECONDARY_TRACK_END_OF_DAY", label: "מגמה שניה בסוף יום (רצוף)" },
   { value: "GROUPING_EXTRA_AT_END", label: "שעות נוספות בהקבצה בסוף יום" },
 ];
 

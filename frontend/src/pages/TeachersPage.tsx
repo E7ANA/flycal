@@ -29,15 +29,7 @@ import { InlineConstraints } from "@/components/common/InlineConstraints";
 import type { Teacher, BlockedSlot } from "@/types/models";
 import { getSubjectColor } from "@/lib/subjectColors";
 
-const DAY_ORDER = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"];
-const DAY_LABELS: Record<string, string> = {
-  SUNDAY: "א׳",
-  MONDAY: "ב׳",
-  TUESDAY: "ג׳",
-  WEDNESDAY: "ד׳",
-  THURSDAY: "ה׳",
-  FRIDAY: "ו׳",
-};
+import { DAYS_ORDER as DAY_ORDER, DAY_LABELS_SHORT as DAY_LABELS } from "@/lib/constraints";
 
 // ─── Availability Grid ──────────────────────────────────
 function AvailabilityGrid({

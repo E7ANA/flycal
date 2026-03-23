@@ -561,7 +561,6 @@ function TrackFormDialog({
     track?.teacher_id ?? "",
   );
   const [hours, setHours] = useState(track?.hours_per_week ?? 1);
-  const [isSecondary, setIsSecondary] = useState(track?.is_secondary ?? false);
   const [linkGroup, setLinkGroup] = useState<number | "">(
     track?.link_group ?? "",
   );
@@ -599,7 +598,6 @@ function TrackFormDialog({
         cluster_id: clusterId,
         teacher_id: teacherId === "" ? null : teacherId,
         hours_per_week: hours,
-        is_secondary: isSecondary,
       });
     },
     onSuccess: () => {
@@ -618,7 +616,6 @@ function TrackFormDialog({
         name,
         teacher_id: teacherId === "" ? null : teacherId,
         hours_per_week: hours,
-        is_secondary: isSecondary,
         link_group: linkGroup === "" ? null : linkGroup,
         source_class_id: sourceClassId === "" ? null : sourceClassId,
         pinned_slots: pinnedSlots.length > 0 ? pinnedSlots : null,
@@ -696,17 +693,6 @@ function TrackFormDialog({
             onChange={(e) => setHours(Number(e.target.value))}
             required
           />
-        </div>
-        <div className="flex items-center gap-2">
-          <input
-            id="track-secondary"
-            type="checkbox"
-            checked={isSecondary}
-            onChange={(e) => setIsSecondary(e.target.checked)}
-            className="rounded border-input"
-          />
-          <Label htmlFor="track-secondary">מגמה שניה</Label>
-          <span className="text-xs text-muted-foreground">(לא מסונכרנת עם שאר הרצועות)</span>
         </div>
         {siblingTracks.length > 0 && (
           <div>

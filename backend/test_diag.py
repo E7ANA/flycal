@@ -29,7 +29,6 @@ ALL_SYS = [
     ("meeting_hours", mb._add_meeting_hours_fulfillment),
     ("meetings_on_teaching_days", mb._add_meetings_on_teaching_days),
     ("teacher_blocked_slots", mb._add_teacher_blocked_slots),
-    ("secondary_track_eod", mb._add_secondary_track_end_of_day),
     ("pinned_lessons", mb._add_pinned_lessons),
     ("pinned_meetings", mb._add_pinned_meetings),
     ("pinned_tracks", mb._add_pinned_tracks),

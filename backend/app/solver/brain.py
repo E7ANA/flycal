@@ -238,12 +238,12 @@ def _collect_subject_day_vars(
             if period_vars:
                 result.append((f"c{cg_id}_s{s_id}", day, period_vars))
 
-    # Grouping tracks — EACH non-secondary track individually
+    # Grouping tracks — EACH track individually
     # (not just the representative, because variable-hours tracks that are
     # subsets of the rep can cherry-pick non-consecutive slots)
     for cluster in data.clusters:
         for track in cluster.tracks:
-            if track.teacher_id is None or track.is_secondary:
+            if track.teacher_id is None:
                 continue
             for day in data.days:
                 period_vars: dict[int, cp_model.IntVar] = {}
@@ -612,7 +612,7 @@ def _apply_always_double(
         count, mode = settings
 
         tracks_with_teacher = [t for t in cluster.tracks
-                               if t.teacher_id is not None and not t.is_secondary]
+                               if t.teacher_id is not None]
         if not tracks_with_teacher:
             continue
         rep_track = max(tracks_with_teacher, key=lambda t: t.hours_per_week)
@@ -1366,12 +1366,19 @@ def _apply_non_plenary_teachers_teach_during_plenary(
 
 
 def _compute_teacher_frontal(data: SolverData) -> dict[int, int]:
-    """Compute frontal (teaching) hours per teacher. Meetings are NOT frontal."""
+    """Compute frontal (teaching) hours per teacher. Meetings are NOT frontal.
+
+    Includes co-teachers: a co-teacher shares the same lesson hours
+    as the primary teacher and should be counted for brain rules.
+    """
     teacher_frontal: dict[int, int] = defaultdict(int)
     for req in data.requirements:
         if req.is_grouped or req.teacher_id is None:
             continue
         teacher_frontal[req.teacher_id] += req.hours_per_week
+        # Co-teachers teach the same hours as the primary teacher
+        for co_tid in (req.co_teacher_ids or []):
+            teacher_frontal[co_tid] += req.hours_per_week
     for cluster in data.clusters:
         for track in cluster.tracks:
             if track.teacher_id is not None:
@@ -1396,12 +1403,23 @@ def _build_teacher_gap_indicators(
     A gap is a period between first and last occupied slot where teacher
     has no lesson/track/meeting.
     """
-    # Build teacher -> list of (day, period, var) for all lessons + tracks
+    # Build co-teacher mapping
+    co_teacher_map: dict[tuple[int, int, int], list[int]] = {}
+    for req in data.requirements:
+        if req.co_teacher_ids and req.teacher_id is not None and not req.is_grouped:
+            co_teacher_map[(req.class_group_id, req.subject_id, req.teacher_id)] = (
+                req.co_teacher_ids
+            )
+
+    # Build teacher -> list of (day, period, var) for all lessons + tracks + co-teaching
     teacher_vars: dict[int, list[tuple[str, int, cp_model.IntVar]]] = defaultdict(list)
 
     for key, var in variables.x.items():
-        _c, _s, t_id, day, period = key
+        c_id, s_id, t_id, day, period = key
         teacher_vars[t_id].append((day, period, var))
+        # Co-teachers share the same slot
+        for co_tid in co_teacher_map.get((c_id, s_id, t_id), []):
+            teacher_vars[co_tid].append((day, period, var))
 
     for cluster in data.clusters:
         for track in cluster.tracks:
@@ -1685,14 +1703,25 @@ def _apply_max_days_by_frontal(
 
     brain_id = _next_brain_id() - 1
 
-    # Build teacher vars by day (lessons + tracks + mandatory meetings)
+    # Build co-teacher mapping: primary teacher key → co-teacher IDs
+    co_teacher_map: dict[tuple[int, int, int], list[int]] = {}
+    for req in data.requirements:
+        if req.co_teacher_ids and req.teacher_id is not None and not req.is_grouped:
+            co_teacher_map[(req.class_group_id, req.subject_id, req.teacher_id)] = (
+                req.co_teacher_ids
+            )
+
+    # Build teacher vars by day (lessons + tracks + co-teaching)
     teacher_day_vars: dict[int, dict[str, list[cp_model.IntVar]]] = defaultdict(
         lambda: defaultdict(list)
     )
 
     for key, var in variables.x.items():
-        _c, _s, t_id, day, _p = key
+        c_id, s_id, t_id, day, _p = key
         teacher_day_vars[t_id][day].append(var)
+        # Co-teachers occupy the same slot as primary teacher
+        for co_tid in co_teacher_map.get((c_id, s_id, t_id), []):
+            teacher_day_vars[co_tid][day].append(var)
 
     for cluster in data.clusters:
         for track in cluster.tracks:
@@ -1702,47 +1731,18 @@ def _apply_max_days_by_frontal(
                     if tk_id == track.id:
                         teacher_day_vars[track.teacher_id][day].append(var)
 
-    # Include pinned mandatory meeting days — a locked teacher attending a
-    # mandatory meeting pinned to a specific day counts that day as a work day.
-    # Only add for pinned days (not all possible days) to keep the model lean.
-    for meeting in data.meetings:
-        is_mandatory = getattr(meeting, "is_mandatory_attendance", True)
-        if not is_mandatory or not meeting.teachers:
-            continue
-        locked_ids = set(getattr(meeting, "locked_teacher_ids", None) or [])
-        pinned = getattr(meeting, "pinned_slots", None) or []
-        pinned_days: set[str] = set()
-        for pin in pinned:
-            d = pin.get("day") if isinstance(pin, dict) else getattr(pin, "day", None)
-            if d is not None:
-                pinned_days.add(d)
-        if not pinned_days:
-            continue
-        for teacher in meeting.teachers:
-            if teacher.id not in locked_ids:
-                continue
-            for key, var in variables.x_meeting.items():
-                m_id, day, _p = key
-                if m_id == meeting.id and day in pinned_days:
-                    teacher_day_vars[teacher.id][day].append(var)
-
-    # Pre-build meeting vars by (teacher_id, day) for manual max_work_days.
-    # Only used for teachers whose limit comes from an explicit max_work_days
-    # setting — NOT for Oz LaTmura automatic limits (avoids infeasibility for
-    # part-time teachers whose meetings span more days than their teaching days).
-    teacher_meeting_day_vars: dict[int, dict[str, list[cp_model.IntVar]]] = defaultdict(
-        lambda: defaultdict(list)
-    )
+    # Include ALL meeting variables for ALL teachers.
+    # Meetings = presence at school → count as work days for ALL limit types.
+    # Previously only pinned mandatory meetings were included for automatic
+    # limits, which caused infeasibility when model_builder required teachers
+    # to teach on meeting days but the work-day limit didn't account for them.
     for key, var in variables.x_meeting.items():
         m_id, day, _p = key
         meeting = next((m for m in data.meetings if m.id == m_id), None)
         if meeting is None or not meeting.teachers:
             continue
-        seen: set[int] = set()
         for teacher in meeting.teachers:
-            if teacher.id not in seen:
-                seen.add(teacher.id)
-                teacher_meeting_day_vars[teacher.id][day].append(var)
+            teacher_day_vars[teacher.id][day].append(var)
 
     breakdown: list[dict] = []
 
@@ -1754,6 +1754,7 @@ def _apply_max_days_by_frontal(
 
         max_days: int | None = None
         source = ""
+        rubrica = data.teacher_rubrica_map.get(t_id)
 
         # 0. Manual override — teacher has explicit max_work_days set
         manual = data.teacher_max_work_days.get(t_id)
@@ -1762,7 +1763,6 @@ def _apply_max_days_by_frontal(
             source = "ידני"
         else:
             # 1. Try rubrica-based limit (rubrica = total employment hours)
-            rubrica = data.teacher_rubrica_map.get(t_id)
             if rubrica is not None and rubrica > 0:
                 max_days = _max_days_for_rubrica(rubrica)
                 if max_days is not None:
@@ -1785,17 +1785,7 @@ def _apply_max_days_by_frontal(
             max_days = min(max_days, total_days - min_free)
 
         by_day = dict(teacher_day_vars.get(t_id, {}))
-
-        # For manual max_work_days: meetings count as presence too.
-        # A management teacher attending a meeting on a day with no lessons
-        # is still physically present — that day counts against their limit.
-        # (For automatic Oz LaTmura limits we deliberately exclude meetings
-        #  to avoid infeasibility for part-time staff.)
-        if source == "ידני":
-            for day, mvars in teacher_meeting_day_vars.get(t_id, {}).items():
-                existing = list(by_day.get(day, []))
-                existing.extend(mvars)
-                by_day[day] = existing
+        # Meetings are already included in teacher_day_vars for ALL sources.
 
         day_active: list[cp_model.IntVar] = []
         for day, day_vars in by_day.items():
