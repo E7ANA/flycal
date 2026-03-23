@@ -1731,11 +1731,12 @@ def _apply_max_days_by_frontal(
                     if tk_id == track.id:
                         teacher_day_vars[track.teacher_id][day].append(var)
 
-    # Meeting vars are added to work-day counting only for EXEMPT teachers
-    # (management/counselors) who can attend meetings without teaching that day.
-    # For everyone else, _add_meetings_on_teaching_days already forces meetings
-    # to coincide with teaching days, so lesson vars already count those days.
-    # Manual max_work_days teachers get ALL meetings added later per-teacher.
+    # Meeting vars for manual max_work_days only (added per-teacher below).
+    # For automatic Oz LaTmura limits, meetings are NOT counted because:
+    # - Regular teachers: meetings must coincide with teaching days (enforced
+    #   by model_builder), so lesson vars already count those days.
+    # - Exempt teachers (management): they have many meetings across many days,
+    #   counting them would make the model infeasible.
     teacher_meeting_day_vars: dict[int, dict[str, list[cp_model.IntVar]]] = defaultdict(
         lambda: defaultdict(list)
     )
@@ -1746,12 +1747,6 @@ def _apply_max_days_by_frontal(
             continue
         for teacher in meeting.teachers:
             teacher_meeting_day_vars[teacher.id][day].append(var)
-
-    # Add meeting vars for EXEMPT teachers (they can attend meetings without lessons)
-    exempt_ids = getattr(data, "meeting_day_exempt_ids", set())
-    for t_id in exempt_ids:
-        for day, mvars in teacher_meeting_day_vars.get(t_id, {}).items():
-            teacher_day_vars[t_id][day].extend(mvars)
 
     breakdown: list[dict] = []
 
