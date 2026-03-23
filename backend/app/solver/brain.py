@@ -1731,18 +1731,27 @@ def _apply_max_days_by_frontal(
                     if tk_id == track.id:
                         teacher_day_vars[track.teacher_id][day].append(var)
 
-    # Include ALL meeting variables for ALL teachers.
-    # Meetings = presence at school → count as work days for ALL limit types.
-    # Previously only pinned mandatory meetings were included for automatic
-    # limits, which caused infeasibility when model_builder required teachers
-    # to teach on meeting days but the work-day limit didn't account for them.
+    # Meeting vars are added to work-day counting only for EXEMPT teachers
+    # (management/counselors) who can attend meetings without teaching that day.
+    # For everyone else, _add_meetings_on_teaching_days already forces meetings
+    # to coincide with teaching days, so lesson vars already count those days.
+    # Manual max_work_days teachers get ALL meetings added later per-teacher.
+    teacher_meeting_day_vars: dict[int, dict[str, list[cp_model.IntVar]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     for key, var in variables.x_meeting.items():
         m_id, day, _p = key
         meeting = next((m for m in data.meetings if m.id == m_id), None)
         if meeting is None or not meeting.teachers:
             continue
         for teacher in meeting.teachers:
-            teacher_day_vars[teacher.id][day].append(var)
+            teacher_meeting_day_vars[teacher.id][day].append(var)
+
+    # Add meeting vars for EXEMPT teachers (they can attend meetings without lessons)
+    exempt_ids = getattr(data, "meeting_day_exempt_ids", set())
+    for t_id in exempt_ids:
+        for day, mvars in teacher_meeting_day_vars.get(t_id, {}).items():
+            teacher_day_vars[t_id][day].extend(mvars)
 
     breakdown: list[dict] = []
 
@@ -1785,7 +1794,17 @@ def _apply_max_days_by_frontal(
             max_days = min(max_days, total_days - min_free)
 
         by_day = dict(teacher_day_vars.get(t_id, {}))
-        # Meetings are already included in teacher_day_vars for ALL sources.
+
+        # For manual max_work_days: meetings count as presence too.
+        # A teacher attending a meeting on a day with no lessons
+        # is still physically present — that day counts against their limit.
+        # For automatic limits: meetings are only added for exempt teachers
+        # (above), since others must teach on meeting days anyway.
+        if source == "ידני":
+            for day, mvars in teacher_meeting_day_vars.get(t_id, {}).items():
+                existing = list(by_day.get(day, []))
+                existing.extend(mvars)
+                by_day[day] = existing
 
         day_active: list[cp_model.IntVar] = []
         for day, day_vars in by_day.items():
