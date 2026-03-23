@@ -178,6 +178,7 @@ def apply_brain_constraints(
     _apply_morning_priority(model, data, variables)
     _apply_flexible_meeting_attendance(model, data, variables)
     _apply_plenary_preferred_attendance(model, data, variables)
+    _apply_plenary_preferred_no_overlap(model, data, variables)
     _apply_non_plenary_teachers_teach_during_plenary(model, data, variables)
     _apply_homeroom_daily_meeting(model, data, variables)
     _apply_max_consecutive_meetings(model, data, variables)
@@ -951,6 +952,92 @@ def _apply_plenary_preferred_attendance(
                 "weight": _PLENARY_PREFERRED_WEIGHT,
             }
             brain_id -= 1
+
+    _update_brain_id(brain_id)
+
+
+# ── Preferred plenary teachers: avoid teaching during plenary timeslot ────
+
+_PLENARY_NO_OVERLAP_PREFERRED_WEIGHT = 85  # High — strongly prefer attending plenary
+
+
+def _apply_plenary_preferred_no_overlap(
+    model: cp_model.CpModel,
+    data: SolverData,
+    variables: SolverVariables,
+) -> None:
+    """Brain principle: preferred plenary teachers should NOT teach during plenary hours.
+
+    Locked teachers have a HARD no-overlap constraint (in model_builder).
+    Preferred (non-locked) teachers get this SOFT penalty: if the plenary is
+    scheduled at a timeslot and a preferred teacher has a lesson there, penalize.
+    This way the solver avoids scheduling their lessons during the plenary,
+    but won't make the problem infeasible if it's the only option.
+    """
+    from app.models.meeting import MeetingType
+
+    brain_id = _next_brain_id() - 1
+    has_any_penalty = False
+
+    for meeting in data.meetings:
+        if meeting.meeting_type != MeetingType.PLENARY.value:
+            continue
+        if not meeting.teachers:
+            continue
+
+        locked_ids = set(getattr(meeting, "locked_teacher_ids", None) or [])
+        # Preferred = in meeting but not locked
+        preferred_teachers = [t for t in meeting.teachers if t.id not in locked_ids]
+        if not preferred_teachers:
+            continue
+
+        for teacher in preferred_teachers:
+            for day, period in data.available_slots:
+                mk = (meeting.id, day, period)
+                meeting_var = variables.x_meeting.get(mk)
+                if meeting_var is None:
+                    continue
+
+                # Collect all lesson/track vars for this teacher at this slot
+                lesson_vars: list[cp_model.IntVar] = []
+                for key, var in variables.x.items():
+                    c_id, s_id, t_id, d, p = key
+                    if t_id == teacher.id and d == day and p == period:
+                        lesson_vars.append(var)
+                for cluster in data.clusters:
+                    for track in cluster.tracks:
+                        if track.teacher_id == teacher.id:
+                            tk = (track.id, day, period)
+                            if tk in variables.x_track:
+                                lesson_vars.append(variables.x_track[tk])
+
+                if not lesson_vars:
+                    continue
+
+                # teacher_teaches = 1 iff teacher has a lesson at this slot
+                teacher_teaches = model.new_bool_var(
+                    f"brain_plenary_overlap_t{teacher.id}_{day}_p{period}_m{meeting.id}"
+                )
+                model.add_max_equality(teacher_teaches, lesson_vars)
+
+                # penalty = plenary_here AND teacher_teaches
+                penalty = model.new_bool_var(
+                    f"brain_plenary_conflict_t{teacher.id}_{day}_p{period}_m{meeting.id}"
+                )
+                model.add(penalty <= meeting_var)
+                model.add(penalty <= teacher_teaches)
+                model.add(penalty >= meeting_var + teacher_teaches - 1)
+                variables.penalties.append(
+                    (penalty, _PLENARY_NO_OVERLAP_PREFERRED_WEIGHT, brain_id)
+                )
+                has_any_penalty = True
+
+    if has_any_penalty:
+        variables.brain_info[brain_id] = {
+            "name": "מורים מועדפים במליאה — הימנעות מלימוד בשעת מליאה",
+            "weight": _PLENARY_NO_OVERLAP_PREFERRED_WEIGHT,
+        }
+        brain_id -= 1
 
     _update_brain_id(brain_id)
 

@@ -27,6 +27,7 @@ import { Label } from "@/components/common/Label";
 import { Badge } from "@/components/common/Badge";
 import { InlineConstraints } from "@/components/common/InlineConstraints";
 import type { Teacher, BlockedSlot } from "@/types/models";
+import { getSubjectColor } from "@/lib/subjectColors";
 
 const DAY_ORDER = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"];
 const DAY_LABELS: Record<string, string> = {
@@ -770,20 +771,21 @@ export default function TeachersPage() {
             header: "מקצועות",
             accessor: (t) => (
               <div className="flex flex-wrap gap-1">
-                {t.subject_ids.map((sid) => (
-                  <Badge
-                    key={sid}
-                    variant="secondary"
-                    style={{
-                      backgroundColor: subjectMap[sid]?.color
-                        ? `${subjectMap[sid].color}20`
-                        : undefined,
-                      color: subjectMap[sid]?.color ?? undefined,
-                    }}
-                  >
-                    {subjectMap[sid]?.name ?? sid}
-                  </Badge>
-                ))}
+                {t.subject_ids.map((sid) => {
+                  const sc = getSubjectColor(subjectMap[sid]?.color);
+                  return (
+                    <Badge
+                      key={sid}
+                      variant="secondary"
+                      style={{
+                        backgroundColor: sc.bg,
+                        color: sc.text,
+                      }}
+                    >
+                      {subjectMap[sid]?.name ?? sid}
+                    </Badge>
+                  );
+                })}
               </div>
             ),
           },

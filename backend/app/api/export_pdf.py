@@ -38,6 +38,42 @@ DAY_LABELS = {
 DAYS_ORDER = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"]
 
 
+_COLOR_KEY_MAP = {
+    "coral":   {"bg": "#FDE8E4", "text": "#8B3A2F", "border": "#F0B8AD"},
+    "purple":  {"bg": "#EDE5F5", "text": "#5B3A8C", "border": "#C9B3E0"},
+    "teal":    {"bg": "#E8F0ED", "text": "#2D5E4F", "border": "#B5D5C8"},
+    "success": {"bg": "#E8F1E4", "text": "#3D5A2E", "border": "#BCD8B0"},
+    "warning": {"bg": "#FBF0E0", "text": "#6B4423", "border": "#E8D0A8"},
+    "error":   {"bg": "#FAE0E4", "text": "#9B2C3B", "border": "#E8A8B4"},
+    "blue":    {"bg": "#DEEAF6", "text": "#2C5F9B", "border": "#A8C8E8"},
+}
+_DEFAULT_COLOR = _COLOR_KEY_MAP["blue"]
+
+_HEX_TO_KEY = {
+    "#ef4444": "error", "#e11d48": "error", "#f43f5e": "error",
+    "#dc2626": "error", "#c4342d": "error",
+    "#ec4899": "coral", "#f97316": "coral", "#fb923c": "coral",
+    "#8b5cf6": "purple", "#6366f1": "purple", "#7c3aed": "purple",
+    "#a855f7": "purple", "#d946ef": "purple",
+    "#10b981": "success", "#84cc16": "success", "#14b8a6": "success",
+    "#2dd4bf": "teal", "#06b6d4": "teal", "#22d3ee": "teal", "#0ea5e9": "teal",
+    "#f59e0b": "warning",
+    "#3b82f6": "blue", "#1b365d": "blue",
+}
+
+
+def _resolve_color(color_key: str | None) -> dict:
+    """Resolve a color key or legacy hex to bg/text/border dict."""
+    if not color_key:
+        return _DEFAULT_COLOR
+    if color_key in _COLOR_KEY_MAP:
+        return _COLOR_KEY_MAP[color_key]
+    mapped = _HEX_TO_KEY.get(color_key.lower())
+    if mapped:
+        return _COLOR_KEY_MAP[mapped]
+    return _DEFAULT_COLOR
+
+
 def _lighten(hex_color: str, factor: float = 0.18) -> str:
     """Return a very light tint of hex_color (factor=0 → white, 1 → original)."""
     try:
@@ -300,9 +336,10 @@ def _lesson_card_html(
 ) -> str:
     """Render a single lesson card div for one slot (may contain multiple grouped lessons)."""
     subj0 = subject_map.get(slot[0].subject_id)
-    color = (subj0.color if subj0 and subj0.color else "#3b82f6")
-    bg = _lighten(color, 0.15)
-    border = _border_color(color, 0.65)
+    color_key = subj0.color if subj0 and subj0.color else None
+    sc = _resolve_color(color_key)
+    bg = sc["bg"]
+    border = sc["border"]
 
     is_grouped = any(l.track_id for l in slot)
 
@@ -337,8 +374,9 @@ def _lesson_card_html(
             t = teacher_map.get(lesson.teacher_id)
             people = escape(t.name) if t else ""
 
+    text_color = sc["text"]
     return (
-        f'<div class="lesson-card" style="background:{bg};border-right-color:{border}">'
+        f'<div class="lesson-card" style="background:{bg};border-right-color:{border};color:{text_color}">'
         f'{subj_html}'
         f'<span class="people">{people}</span>'
         f'</div>'

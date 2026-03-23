@@ -447,10 +447,19 @@ def _add_teacher_no_overlap(
                             items_at_slot.append(("track", track.id, variables.x_track[tk]))
 
             # Meeting variables for this teacher at this slot
-            # (only mandatory-attendance meetings participate in no-overlap)
+            # - Mandatory-attendance meetings: all assigned teachers participate in no-overlap
+            # - PLENARY meetings: only locked teachers participate in no-overlap
+            #   (preferred teachers are handled by the brain as SOFT)
+            # - Other non-mandatory meetings: handled by brain as SOFT
             for meeting in data.meetings:
-                if not getattr(meeting, "is_mandatory_attendance", True):
-                    continue  # Flexible meetings handled by brain as SOFT
+                is_mandatory = getattr(meeting, "is_mandatory_attendance", True)
+                if meeting.meeting_type == MeetingType.PLENARY.value:
+                    # Only locked teachers have HARD no-overlap with plenary
+                    locked_ids = set(getattr(meeting, "locked_teacher_ids", None) or [])
+                    if teacher_id not in locked_ids:
+                        continue
+                elif not is_mandatory:
+                    continue  # Flexible non-plenary meetings handled by brain as SOFT
                 if any(t.id == teacher_id for t in meeting.teachers):
                     mk = (meeting.id, day, period)
                     if mk in variables.x_meeting:
@@ -910,6 +919,11 @@ def _add_meetings_on_teaching_days(
         is_mandatory = getattr(meeting, "is_mandatory_attendance", True)
         locked_ids: set[int] = set(getattr(meeting, "locked_teacher_ids", None) or [])
 
+        # PLENARY: only locked teachers get the HARD "must teach on plenary day" rule.
+        # Preferred teachers are handled by brain as SOFT.
+        if meeting.meeting_type == MeetingType.PLENARY.value:
+            is_mandatory = False  # Treat as non-mandatory so only locked teachers are enforced
+
         # Build set of teachers who have a blocked-slot conflict with any
         # of the meeting's pinned slots.  These teachers are automatically
         # excused — they cannot attend and must not constrain the meeting.
@@ -941,14 +955,16 @@ def _add_meetings_on_teaching_days(
             if not day_meeting_vars:
                 continue
 
-            # For non-pinned days, enforce all relevant teachers.
-            # For pinned days of mandatory meetings: still enforce locked
-            # teachers — they must teach on days they attend a mandatory meeting.
-            # For pinned days of non-mandatory meetings: skip (teacher is
-            # already committed to being at school).
             is_pinned_day = day in pinned_days
 
-            # Determine which teachers to enforce for this meeting
+            # Determine which teachers to enforce for this meeting.
+            # - Mandatory meetings: all teachers on non-pinned days,
+            #   only locked teachers on pinned days.
+            # - Non-mandatory with locked teachers (incl. PLENARY):
+            #   enforce locked teachers (even on pinned days — they MUST
+            #   teach on the meeting day).
+            # - Fully non-mandatory with no locked: skip enforcement.
+            #   On pinned days also skip (teacher already committed).
             if is_mandatory:
                 if is_pinned_day:
                     # Pinned mandatory day: only enforce locked teachers
@@ -961,24 +977,25 @@ def _add_meetings_on_teaching_days(
                         t for t in meeting.teachers
                         if t.id not in conflicting_teacher_ids
                     ]
-            elif is_pinned_day:
-                continue  # Non-mandatory pinned day: skip enforcement
             elif locked_ids:
-                # Non-mandatory but with locked teachers: only enforce locked ones
+                # Non-mandatory (incl. PLENARY) with locked teachers:
+                # enforce locked ones — even on pinned days, they must
+                # teach on this day to justify attending.
                 enforced_teachers = [
                     t for t in meeting.teachers
                     if t.id in locked_ids and t.id not in conflicting_teacher_ids
                 ]
+            elif is_pinned_day:
+                continue  # Non-mandatory pinned day, no locked: skip
             else:
-                # Fully non-mandatory: skip all enforcement
+                # Fully non-mandatory with no locked: skip all enforcement
                 continue
 
             # For each enforced teacher, if they have no lessons on this day,
             # no meeting can be scheduled on this day.
-            # Skip teachers with no teaching assignments at all (admins/managers) —
-            # they can attend meetings on any day.
+            # Skip teachers with no teaching assignments at all (admins/managers).
             # Skip management + counselor staff — exempt from meeting-day rule.
-            # Also skip teachers excused from this meeting (approved via overlap system).
+            # Skip teachers excused from this meeting (approved via overlap system).
             for teacher in enforced_teachers:
                 # Management/counselor staff exempt from teaching-day requirement
                 if teacher.id in data.meeting_day_exempt_ids:
@@ -1000,6 +1017,10 @@ def _add_meetings_on_teaching_days(
 
                 lesson_vars = all_teacher_vars.get(day, [])
                 if not lesson_vars:
+                    if is_pinned_day:
+                        # Pinned meeting — can't move it. Skip this teacher;
+                        # she simply cannot teach on this day.
+                        continue
                     # Teacher has no possible lessons on this day → block meeting here
                     for mv in day_meeting_vars:
                         model.add(mv == 0)

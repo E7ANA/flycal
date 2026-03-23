@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import { DAY_LABELS } from "@/lib/constraints";
+import { getSubjectColor } from "@/lib/subjectColors";
 import type { ScheduledLesson, ScheduledMeeting } from "@/types/models";
 
 interface MeetingInfo {
@@ -237,16 +238,16 @@ export function TimetableGrid({
                       // Single item → full-width block
                       if (!isMulti && flatItems.length === 1) {
                         const item = flatItems[0];
+                        const sc = getSubjectColor(item.color);
                         return (
                           <div
                             className="rounded px-2 py-1 text-xs mb-0.5"
                             style={{
-                              backgroundColor: item.color
-                                ? `${item.color}${item.isTrack ? "30" : "20"}`
-                                : item.isTrack ? "#dbeafe" : "#f3f4f6",
-                              borderRight: `3px solid ${item.color ?? "#ccc"}`,
+                              backgroundColor: sc.bg,
+                              color: sc.text,
+                              borderRight: `3px solid ${sc.border}`,
                               borderLeft: item.isTrack
-                                ? `3px solid ${item.color ?? "#3b82f6"}`
+                                ? `3px solid ${sc.border}`
                                 : undefined,
                             }}
                           >
@@ -271,16 +272,16 @@ export function TimetableGrid({
                             const shortTeacher = item.teacherName.length > 6
                               ? item.teacherName.split(/\s/)[0] || item.teacherName.slice(0, 5)
                               : item.teacherName;
+                            const sc = getSubjectColor(item.color);
                             return (
                               <div
                                 key={item.key}
                                 className="flex-1 rounded px-1 py-0.5 text-[10px] min-w-0"
                                 title={`${item.name} — ${item.teacherName}`}
                                 style={{
-                                  backgroundColor: item.color
-                                    ? `${item.color}30`
-                                    : "#dbeafe",
-                                  borderRight: `2px solid ${item.color ?? "#ccc"}`,
+                                  backgroundColor: sc.bg,
+                                  color: sc.text,
+                                  borderRight: `2px solid ${sc.border}`,
                                 }}
                               >
                                 <div className="font-medium truncate">{shortName}</div>

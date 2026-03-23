@@ -483,10 +483,7 @@ def _do_import(data: ImportRequest, db: Session):
     import hashlib, re as _re
 
     _SUBJECT_COLORS = [
-        "#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6",
-        "#EC4899", "#06B6D4", "#F97316", "#14B8A6", "#6366F1",
-        "#D946EF", "#0EA5E9", "#84CC16", "#E11D48", "#7C3AED",
-        "#2DD4BF", "#FB923C", "#A855F7", "#22D3EE", "#F43F5E",
+        "blue", "coral", "purple", "teal", "success", "warning", "error",
     ]
 
     def _base_subject_name(name: str) -> str:

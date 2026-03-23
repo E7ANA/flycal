@@ -4,7 +4,7 @@ from pydantic import BaseModel
 class SubjectCreate(BaseModel):
     school_id: int
     name: str
-    color: str = "#3B82F6"
+    color: str = "blue"
     double_priority: int | None = None
     morning_priority: int | None = None
     always_double: bool = False

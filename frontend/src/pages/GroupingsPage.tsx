@@ -50,6 +50,7 @@ import { MultiClassPicker } from "@/components/common/MultiClassPicker";
 import { InlineConstraints } from "@/components/common/InlineConstraints";
 import { DAY_LABELS, DAYS_ORDER } from "@/lib/constraints";
 import type { Track, Subject, Teacher, Grade, ClassGroup, SubjectRequirement, PinnedSlot, BlockedSlot } from "@/types/models";
+import { SUBJECT_COLORS, getSubjectColor } from "@/lib/subjectColors";
 
 type TabId = "subjects" | "requirements" | "shared";
 
@@ -898,12 +899,17 @@ function RequirementPickerDialog({
             return (
               <div key={subjectId} className="space-y-1">
                 <h4 className="text-sm font-medium flex items-center gap-2">
-                  {subject && (
-                    <span
-                      className="inline-block h-3 w-3 rounded-full"
-                      style={{ backgroundColor: subject.color ?? "#ccc" }}
-                    />
-                  )}
+                  {subject && (() => {
+                    const sc = getSubjectColor(subject.color);
+                    return (
+                      <span
+                        className="inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                        style={{ backgroundColor: sc.bg, color: sc.text }}
+                      >
+                        {sc.label}
+                      </span>
+                    );
+                  })()}
                   {subject?.name ?? `מקצוע ${subjectId}`}
                 </h4>
                 {reqs.map((r) => {
@@ -1266,7 +1272,7 @@ function SubjectFormDialog({
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState(subject?.name ?? "");
-  const [color, setColor] = useState(subject?.color ?? "#1B365D");
+  const [color, setColor] = useState(subject?.color ?? "blue");
   const [alwaysDouble, setAlwaysDouble] = useState(subject?.always_double ?? false);
   const [limitLastPeriods, setLimitLastPeriods] = useState(subject?.limit_last_periods ?? false);
   const [doublePriority, setDoublePriority] = useState<string>(
@@ -1357,10 +1363,24 @@ function SubjectFormDialog({
           <Input id="subj-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="לדוגמה: מתמטיקה" required />
         </div>
         <div>
-          <Label htmlFor="subj-color">צבע</Label>
-          <div className="flex items-center gap-3">
-            <input id="subj-color" type="color" value={color} onChange={(e) => setColor(e.target.value)} className="h-9 w-12 rounded border cursor-pointer" />
-            <span className="text-sm text-muted-foreground">{color}</span>
+          <Label>צבע</Label>
+          <div className="flex items-center gap-2 flex-wrap">
+            {SUBJECT_COLORS.map((sc) => (
+              <button
+                key={sc.key}
+                type="button"
+                onClick={() => setColor(sc.key)}
+                className="rounded-full px-3 py-1 text-xs font-medium transition-all cursor-pointer"
+                style={{
+                  backgroundColor: sc.bg,
+                  color: sc.text,
+                  border: color === sc.key ? `2px solid ${sc.text}` : "2px solid transparent",
+                  transform: color === sc.key ? "scale(1.1)" : undefined,
+                }}
+              >
+                {sc.label}
+              </button>
+            ))}
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -1774,10 +1794,18 @@ export default function GroupingsPage() {
             columns={[
               {
                 header: "צבע",
-                accessor: (s: Subject) => (
-                  <div className="h-5 w-5 rounded-full" style={{ backgroundColor: s.color ?? "#ccc" }} />
-                ),
-                className: "w-12",
+                accessor: (s: Subject) => {
+                  const sc = getSubjectColor(s.color);
+                  return (
+                    <span
+                      className="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                      style={{ backgroundColor: sc.bg, color: sc.text }}
+                    >
+                      {sc.label}
+                    </span>
+                  );
+                },
+                className: "w-20",
               },
               {
                 header: "שם",
@@ -1945,7 +1973,7 @@ export default function GroupingsPage() {
                               }`}
                             >
                               {subject && (
-                                <span className="inline-block h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: subject.color ?? "#ccc" }} />
+                                <span className="inline-block h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: getSubjectColor(subject.color).bg }} />
                               )}
                               <span className="truncate">{cluster.name}</span>
                               <span className="text-xs text-muted-foreground ms-auto shrink-0">{clusterTracks.length} רמות</span>
@@ -2060,7 +2088,7 @@ export default function GroupingsPage() {
                             const s = subjectMap[r.subject_id];
                             return (
                               <span className="flex items-center gap-2">
-                                {s && <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: s.color ?? "#ccc" }} />}
+                                {s && <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: getSubjectColor(s.color).bg }} />}
                                 {r._isTrack ? r._trackName : (s?.name ?? r.subject_id)}
                               </span>
                             );
@@ -2270,7 +2298,7 @@ export default function GroupingsPage() {
                         <h2 className="text-xl font-bold">{cluster.name}</h2>
                         {subject && (
                           <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                            <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: subject.color ?? "#ccc" }} />
+                            <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: getSubjectColor(subject.color).bg }} />
                             {subject.name}
                           </span>
                         )}
@@ -2487,7 +2515,7 @@ export default function GroupingsPage() {
                           {subject && (
                             <span
                               className="inline-block h-3 w-3 rounded-full shrink-0"
-                              style={{ backgroundColor: subject.color ?? "#ccc" }}
+                              style={{ backgroundColor: getSubjectColor(subject.color).bg }}
                             />
                           )}
                           <span className="font-medium">{cluster.name}</span>

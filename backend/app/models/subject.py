@@ -10,7 +10,7 @@ class Subject(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     school_id: Mapped[int] = mapped_column(ForeignKey("schools.id"))
     name: Mapped[str] = mapped_column(String(200))
-    color: Mapped[str] = mapped_column(String(20), default="#3B82F6")
+    color: Mapped[str] = mapped_column(String(20), default="blue")
     # Brain: priority for double-period scheduling (0-100, null = auto from hours)
     double_priority: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Morning priority: 0-100, higher = more important to schedule early in day

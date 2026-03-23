@@ -31,6 +31,7 @@ import { InlineConstraints } from "@/components/common/InlineConstraints";
 import { DAY_LABELS, DAYS_ORDER } from "@/lib/constraints";
 import { computeAllClassHours } from "@/lib/classHours";
 import type { Subject, BlockedSlot } from "@/types/models";
+import { SUBJECT_COLORS, getSubjectColor, DEFAULT_SUBJECT_COLOR } from "@/lib/subjectColors";
 
 // ─── Subject Form ────────────────────────────────────────
 function SubjectFormDialog({
@@ -46,7 +47,7 @@ function SubjectFormDialog({
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState(subject?.name ?? "");
-  const [color, setColor] = useState(subject?.color ?? "#3B82F6");
+  const [color, setColor] = useState(subject?.color ?? DEFAULT_SUBJECT_COLOR);
   const [alwaysDouble, setAlwaysDouble] = useState(
     subject?.always_double ?? false,
   );
@@ -143,16 +144,24 @@ function SubjectFormDialog({
           />
         </div>
         <div>
-          <Label htmlFor="subj-color">צבע</Label>
-          <div className="flex items-center gap-3">
-            <input
-              id="subj-color"
-              type="color"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              className="h-9 w-12 rounded border cursor-pointer"
-            />
-            <span className="text-sm text-muted-foreground">{color}</span>
+          <Label>צבע</Label>
+          <div className="flex items-center gap-2 flex-wrap">
+            {SUBJECT_COLORS.map((sc) => (
+              <button
+                key={sc.key}
+                type="button"
+                onClick={() => setColor(sc.key)}
+                className="rounded-full px-3 py-1 text-xs font-medium transition-all cursor-pointer"
+                style={{
+                  backgroundColor: sc.bg,
+                  color: sc.text,
+                  border: color === sc.key ? `2px solid ${sc.text}` : "2px solid transparent",
+                  transform: color === sc.key ? "scale(1.1)" : undefined,
+                }}
+              >
+                {sc.label}
+              </button>
+            ))}
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -481,13 +490,18 @@ export default function SubjectsPage() {
           columns={[
             {
               header: "צבע",
-              accessor: (s) => (
-                <div
-                  className="h-5 w-5 rounded-full"
-                  style={{ backgroundColor: s.color ?? "#ccc" }}
-                />
-              ),
-              className: "w-12",
+              accessor: (s) => {
+                const sc = getSubjectColor(s.color);
+                return (
+                  <span
+                    className="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                    style={{ backgroundColor: sc.bg, color: sc.text }}
+                  >
+                    {sc.label}
+                  </span>
+                );
+              },
+              className: "w-20",
             },
             { header: "שם", accessor: "name" },
             {

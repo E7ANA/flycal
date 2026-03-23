@@ -61,6 +61,44 @@ def update_subject(
     return subject
 
 
+_HEX_TO_COLOR_KEY = {
+    "#ef4444": "error", "#e11d48": "error", "#f43f5e": "error",
+    "#dc2626": "error", "#c4342d": "error",
+    "#ec4899": "coral", "#f97316": "coral", "#fb923c": "coral",
+    "#8b5cf6": "purple", "#6366f1": "purple", "#7c3aed": "purple",
+    "#a855f7": "purple", "#d946ef": "purple",
+    "#10b981": "success", "#84cc16": "success", "#14b8a6": "success",
+    "#2dd4bf": "teal", "#06b6d4": "teal", "#22d3ee": "teal", "#0ea5e9": "teal",
+    "#f59e0b": "warning",
+    "#3b82f6": "blue", "#1b365d": "blue",
+}
+_VALID_COLOR_KEYS = {"coral", "purple", "teal", "success", "warning", "error", "blue"}
+
+# Cycle through colors for subjects that don't map to any known hex
+_COLOR_CYCLE = ["blue", "coral", "purple", "teal", "success", "warning", "error"]
+
+
+@router.post("/migrate-colors")
+def migrate_hex_colors_to_keys(school_id: int, db: Session = Depends(get_db)):
+    """One-time migration: convert legacy hex colors to color keys."""
+    subjects = db.query(Subject).filter(Subject.school_id == school_id).all()
+    updated = 0
+    cycle_idx = 0
+    for subj in subjects:
+        if subj.color in _VALID_COLOR_KEYS:
+            continue  # Already migrated
+        mapped = _HEX_TO_COLOR_KEY.get(subj.color.lower()) if subj.color else None
+        if mapped:
+            subj.color = mapped
+        else:
+            # Assign from cycle for unknown hex colors
+            subj.color = _COLOR_CYCLE[cycle_idx % len(_COLOR_CYCLE)]
+            cycle_idx += 1
+        updated += 1
+    db.commit()
+    return {"migrated": updated, "total": len(subjects)}
+
+
 @router.delete("/{subject_id}", status_code=204)
 def delete_subject(subject_id: int, db: Session = Depends(get_db)):
     subject = db.get(Subject, subject_id)
