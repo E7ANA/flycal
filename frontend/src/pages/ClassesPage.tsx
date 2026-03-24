@@ -1,13 +1,14 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, Calendar } from "lucide-react";
+import { Plus, Pencil, Trash2, Calendar, Clock } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import { fetchGrades, createGrade, updateGrade, deleteGrade } from "@/api/grades";
 import { fetchClasses, createClass, updateClass, deleteClass } from "@/api/classes";
 import { fetchRequirements } from "@/api/subjects";
 import { fetchGroupingClusters } from "@/api/groupings";
+import { fetchConstraints, createConstraint, updateConstraint, deleteConstraint } from "@/api/constraints";
 import { computeAllClassHours } from "@/lib/classHours";
 import { Button } from "@/components/common/Button";
 import { DataTable } from "@/components/common/DataTable";
@@ -17,7 +18,154 @@ import { Input } from "@/components/common/Input";
 import { Select } from "@/components/common/Select";
 import { Label } from "@/components/common/Label";
 import { Badge } from "@/components/common/Badge";
-import type { Grade, ClassGroup } from "@/types/models";
+import { DAY_LABELS_SHORT, DAYS_ORDER } from "@/lib/constraints";
+import type { Grade, ClassGroup, Constraint } from "@/types/models";
+
+// ─── End-of-Day Constraint Editor ────────────────────────
+// Used for both grades and classes
+function EndOfDayEditor({
+  constraint,
+  schoolId,
+  targetType,
+  targetId,
+  targetName,
+  inheritedConstraint,
+}: {
+  constraint: Constraint | undefined;
+  schoolId: number;
+  targetType: "GRADE" | "CLASS";
+  targetId: number;
+  targetName: string;
+  inheritedConstraint?: Constraint;
+}) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [maxPeriods, setMaxPeriods] = useState<string>("");
+
+  useEffect(() => {
+    if (constraint) {
+      setMaxPeriods(String(constraint.parameters?.max_periods ?? ""));
+    } else {
+      setMaxPeriods("");
+    }
+  }, [constraint]);
+
+  const saveMut = useMutation({
+    mutationFn: async () => {
+      const val = parseInt(maxPeriods);
+      if (!val || val < 1) {
+        // Delete constraint if clearing
+        if (constraint) await deleteConstraint(constraint.id);
+        return;
+      }
+      const payload = {
+        school_id: schoolId,
+        name: `סוף יום — ${targetName}`,
+        category: targetType === "GRADE" ? "GLOBAL" as const : "CLASS" as const,
+        type: "HARD" as const,
+        weight: 100,
+        rule_type: "CLASS_DAY_LENGTH_LIMIT" as const,
+        parameters: { max_periods: val, day: "ALL" },
+        target_type: targetType,
+        target_id: targetId,
+        is_active: true,
+      };
+      if (constraint) {
+        await updateConstraint(constraint.id, payload);
+      } else {
+        await createConstraint(payload as Omit<Constraint, "id" | "created_at">);
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["constraints", schoolId] });
+      setEditing(false);
+      toast.success("אילוץ סוף יום עודכן");
+    },
+    onError: () => toast.error("שגיאה בעדכון אילוץ"),
+  });
+
+  const removeMut = useMutation({
+    mutationFn: () => deleteConstraint(constraint!.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["constraints", schoolId] });
+      setMaxPeriods("");
+      setEditing(false);
+      toast.success("אילוץ סוף יום הוסר");
+    },
+  });
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1">
+        <input
+          type="number"
+          min={1}
+          max={10}
+          value={maxPeriods}
+          onChange={(e) => setMaxPeriods(e.target.value)}
+          className="w-14 rounded border border-border bg-background px-1.5 py-0.5 text-center text-sm"
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === "Enter") saveMut.mutate();
+            if (e.key === "Escape") setEditing(false);
+          }}
+        />
+        <Button size="icon" variant="ghost" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
+          <span className="text-xs">V</span>
+        </Button>
+        {constraint && (
+          <Button size="icon" variant="ghost" onClick={() => removeMut.mutate()} disabled={removeMut.isPending}>
+            <Trash2 className="h-3 w-3 text-destructive" />
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  if (constraint) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className="cursor-pointer"
+        title="לחץ לעריכה"
+      >
+        <Badge variant="default" className="text-xs">
+          שעה {constraint.parameters?.max_periods}
+        </Badge>
+      </button>
+    );
+  }
+
+  if (inheritedConstraint) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setMaxPeriods(String(inheritedConstraint.parameters?.max_periods ?? ""));
+          setEditing(true);
+        }}
+        className="cursor-pointer"
+        title="ירושה משכבה — לחץ ל-override"
+      >
+        <Badge variant="outline" className="text-xs opacity-60">
+          שעה {inheritedConstraint.parameters?.max_periods} (שכבה)
+        </Badge>
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      className="cursor-pointer text-muted-foreground hover:text-foreground"
+      title="הוסף אילוץ סוף יום"
+    >
+      <Clock className="h-4 w-4" />
+    </button>
+  );
+}
 
 // ─── Grade Form ──────────────────────────────────────────
 function GradeFormDialog({
@@ -261,10 +409,32 @@ export default function ClassesPage() {
     enabled: !!schoolId,
   });
 
+  const { data: constraints = [] } = useQuery({
+    queryKey: ["constraints", schoolId],
+    queryFn: () => fetchConstraints(schoolId!),
+    enabled: !!schoolId,
+  });
+
   const classHoursSummary = useMemo(
     () => computeAllClassHours(allRequirements, clusters),
     [allRequirements, clusters],
   );
+
+  // Build end-of-day constraint lookups
+  const endOfDayConstraints = useMemo(() => {
+    const byGrade: Record<number, Constraint> = {};
+    const byClass: Record<number, Constraint> = {};
+    for (const c of constraints) {
+      if (c.rule_type !== "CLASS_DAY_LENGTH_LIMIT") continue;
+      if (!c.is_active) continue;
+      if (c.target_type === "GRADE" && c.target_id) {
+        byGrade[c.target_id] = c;
+      } else if (c.target_type === "CLASS" && c.target_id) {
+        byClass[c.target_id] = c;
+      }
+    }
+    return { byGrade, byClass };
+  }, [constraints]);
 
   const toggleHomeroomMut = useMutation({
     mutationFn: ({ id, value }: { id: number; value: boolean }) =>
@@ -327,6 +497,18 @@ export default function ClassesPage() {
                 const count = classes.filter((c) => c.grade_id === g.id).length;
                 return <Badge variant="secondary">{count}</Badge>;
               },
+            },
+            {
+              header: "סוף יום",
+              accessor: (g) => (
+                <EndOfDayEditor
+                  constraint={endOfDayConstraints.byGrade[g.id]}
+                  schoolId={schoolId}
+                  targetType="GRADE"
+                  targetId={g.id}
+                  targetName={`שכבה ${g.name}`}
+                />
+              ),
             },
             {
               header: "פעולות",
@@ -417,6 +599,19 @@ export default function ClassesPage() {
                   <Badge variant="secondary" className="font-bold">{s.total}</Badge>
                 ) : "—";
               },
+            },
+            {
+              header: "סוף יום",
+              accessor: (c) => (
+                <EndOfDayEditor
+                  constraint={endOfDayConstraints.byClass[c.id]}
+                  schoolId={schoolId}
+                  targetType="CLASS"
+                  targetId={c.id}
+                  targetName={c.name}
+                  inheritedConstraint={endOfDayConstraints.byGrade[c.grade_id]}
+                />
+              ),
             },
             {
               header: "מחנכת יומית",
