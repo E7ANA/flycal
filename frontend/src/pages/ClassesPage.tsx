@@ -1,13 +1,14 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, Calendar } from "lucide-react";
+import { Plus, Pencil, Trash2, Calendar, Clock } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import { fetchGrades, createGrade, updateGrade, deleteGrade } from "@/api/grades";
 import { fetchClasses, createClass, updateClass, deleteClass } from "@/api/classes";
 import { fetchRequirements } from "@/api/subjects";
 import { fetchGroupingClusters } from "@/api/groupings";
+import { fetchConstraints, createConstraint, updateConstraint, deleteConstraint } from "@/api/constraints";
 import { computeAllClassHours } from "@/lib/classHours";
 import { Button } from "@/components/common/Button";
 import { DataTable } from "@/components/common/DataTable";
@@ -17,7 +18,239 @@ import { Input } from "@/components/common/Input";
 import { Select } from "@/components/common/Select";
 import { Label } from "@/components/common/Label";
 import { Badge } from "@/components/common/Badge";
-import type { Grade, ClassGroup } from "@/types/models";
+import { DAY_LABELS, DAYS_ORDER } from "@/lib/constraints";
+import type { Grade, ClassGroup, Constraint } from "@/types/models";
+
+// ─── End-of-Day Constraint Dialog (CLASS_END_TIME) ───────
+// Matches the existing ConstraintsPage form exactly.
+function EndOfDayConstraintDialog({
+  open,
+  onClose,
+  constraint,
+  schoolId,
+  allClasses,
+  preselectedClassIds,
+}: {
+  open: boolean;
+  onClose: () => void;
+  constraint: Constraint | null;
+  schoolId: number;
+  allClasses: ClassGroup[];
+  preselectedClassIds: number[];
+}) {
+  const qc = useQueryClient();
+  const params = constraint?.parameters ?? {};
+
+  const [name, setName] = useState("");
+  const [type, setType] = useState<"HARD" | "SOFT">("HARD");
+  const [weight, setWeight] = useState(80);
+  const [days, setDays] = useState<string[]>([]);
+  const [allowedPeriods, setAllowedPeriods] = useState<number[]>([]);
+  const [targetClassIds, setTargetClassIds] = useState<number[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (constraint) {
+      setName(constraint.name ?? "");
+      setType((constraint.type as "HARD" | "SOFT") ?? "HARD");
+      setWeight(constraint.weight ?? 80);
+      setDays((params.days as string[]) ?? [...DAYS_ORDER]);
+      // Support both allowed_periods and legacy min/max
+      const ap = params.allowed_periods as number[] | undefined;
+      if (ap) {
+        setAllowedPeriods(ap);
+      } else {
+        const mn = params.min_period as number | undefined;
+        const mx = params.max_period as number | undefined;
+        if (mn != null && mx != null) {
+          setAllowedPeriods(Array.from({ length: mx - mn + 1 }, (_, i) => mn + i));
+        } else {
+          setAllowedPeriods([6, 7, 8]);
+        }
+      }
+      const tids = params.target_class_ids as number[] | undefined;
+      setTargetClassIds(tids ?? preselectedClassIds);
+    } else {
+      setName("");
+      setType("HARD");
+      setWeight(80);
+      setDays([...DAYS_ORDER]);
+      setAllowedPeriods([6, 7, 8]);
+      setTargetClassIds(preselectedClassIds);
+    }
+  }, [open, constraint, preselectedClassIds]);
+
+  const toggleDay = (d: string) =>
+    setDays((prev) => (prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d]));
+
+  const togglePeriod = (p: number) =>
+    setAllowedPeriods((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p].sort((a, b) => a - b)));
+
+  const toggleClass = (id: number) =>
+    setTargetClassIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  const toggleAll = () =>
+    setTargetClassIds((prev) => (prev.length === allClasses.length ? [] : allClasses.map((c) => c.id)));
+
+  const saveMut = useMutation({
+    mutationFn: async () => {
+      const payload = {
+        school_id: schoolId,
+        name: name || "אילוץ סוף יום",
+        description: null,
+        category: "CLASS" as const,
+        type,
+        weight: type === "SOFT" ? weight : 100,
+        rule_type: "CLASS_END_TIME" as const,
+        parameters: {
+          days,
+          allowed_periods: allowedPeriods,
+          target_class_ids: targetClassIds.length === 0 || targetClassIds.length === allClasses.length ? [] : targetClassIds,
+        },
+        target_type: "ALL" as const,
+        target_id: null,
+        is_active: true,
+        notes: null,
+      };
+      if (constraint) {
+        await updateConstraint(constraint.id, payload);
+      } else {
+        await createConstraint(payload as Omit<Constraint, "id" | "created_at">);
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["constraints", schoolId] });
+      toast.success("אילוץ סוף יום נשמר");
+      onClose();
+    },
+    onError: () => toast.error("שגיאה בשמירה"),
+  });
+
+  const removeMut = useMutation({
+    mutationFn: () => deleteConstraint(constraint!.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["constraints", schoolId] });
+      toast.success("אילוץ הוסר");
+      onClose();
+    },
+  });
+
+  const allSelected = targetClassIds.length === 0 || targetClassIds.length === allClasses.length;
+
+  return (
+    <Dialog open={open} onClose={onClose} className="max-w-lg">
+      <DialogHeader>
+        <DialogTitle>אילוץ סוף יום</DialogTitle>
+      </DialogHeader>
+      <div className="space-y-4">
+        <div>
+          <Label>שם (אופציונלי)</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="הסעות רביעי ח ט" />
+        </div>
+
+        <div>
+          <Label>סוג</Label>
+          <Select value={type} onChange={(e) => setType(e.target.value as "HARD" | "SOFT")}>
+            <option value="HARD">חובה (HARD)</option>
+            <option value="SOFT">רך (SOFT)</option>
+          </Select>
+        </div>
+
+        {type === "SOFT" && (
+          <div>
+            <Label>משקל ({weight})</Label>
+            <input type="range" min={1} max={100} value={weight} onChange={(e) => setWeight(Number(e.target.value))} className="w-full" />
+          </div>
+        )}
+
+        <div>
+          <Label>ימים</Label>
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {DAYS_ORDER.map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => toggleDay(d)}
+                className={`px-3 py-1.5 text-sm rounded border cursor-pointer transition-colors ${
+                  days.includes(d)
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-muted text-muted-foreground border-border"
+                }`}
+              >
+                {DAY_LABELS[d]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <Label>שעות סיום אפשריות</Label>
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {Array.from({ length: 10 }, (_, i) => i + 1).map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => togglePeriod(p)}
+                className={`w-9 h-9 text-sm rounded border cursor-pointer transition-colors ${
+                  allowedPeriods.includes(p)
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-muted text-muted-foreground border-border"
+                }`}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">בחר את השעות שבהן מותר לסיים את היום</p>
+        </div>
+
+        <div>
+          <Label>כיתות</Label>
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            <button
+              type="button"
+              onClick={toggleAll}
+              className={`px-3 py-1.5 text-sm rounded border cursor-pointer transition-colors ${
+                allSelected
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-muted text-muted-foreground border-border"
+              }`}
+            >
+              כולן
+            </button>
+            {allClasses.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => toggleClass(c.id)}
+                className={`px-3 py-1.5 text-sm rounded border cursor-pointer transition-colors ${
+                  allSelected || targetClassIds.includes(c.id)
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-muted text-muted-foreground border-border"
+                }`}
+              >
+                {c.name}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">ריק = כל הכיתות</p>
+        </div>
+
+        <DialogFooter>
+          <Button onClick={() => saveMut.mutate()} disabled={saveMut.isPending || days.length === 0 || allowedPeriods.length === 0}>
+            {saveMut.isPending ? "שומר..." : constraint ? "עדכן" : "צור"}
+          </Button>
+          {constraint && (
+            <Button variant="destructive" onClick={() => removeMut.mutate()} disabled={removeMut.isPending}>
+              הסר
+            </Button>
+          )}
+          <Button variant="outline" onClick={onClose}>ביטול</Button>
+        </DialogFooter>
+      </div>
+    </Dialog>
+  );
+}
 
 // ─── Grade Form ──────────────────────────────────────────
 function GradeFormDialog({
@@ -236,6 +469,10 @@ export default function ClassesPage() {
   const [classDialogOpen, setClassDialogOpen] = useState(false);
   const [editingClass, setEditingClass] = useState<ClassGroup | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ type: "grade" | "class"; id: number; name: string } | null>(null);
+  // End-of-day constraint dialog
+  const [eodOpen, setEodOpen] = useState(false);
+  const [eodPreselected, setEodPreselected] = useState<number[]>([]);
+  const [eodConstraint, setEodConstraint] = useState<Constraint | null>(null);
 
   const { data: grades = [] } = useQuery({
     queryKey: ["grades", schoolId],
@@ -260,6 +497,42 @@ export default function ClassesPage() {
     queryFn: () => fetchGroupingClusters(schoolId!),
     enabled: !!schoolId,
   });
+
+  const { data: constraints = [] } = useQuery({
+    queryKey: ["constraints", schoolId],
+    queryFn: () => fetchConstraints(schoolId!),
+    enabled: !!schoolId,
+  });
+
+  // Find CLASS_END_TIME constraints that apply to a specific class
+  const findEodForClass = (classId: number): Constraint | null => {
+    for (const c of constraints) {
+      if (c.rule_type !== "CLASS_END_TIME" || !c.is_active) continue;
+      const tids = (c.parameters?.target_class_ids as number[]) ?? [];
+      if (tids.length === 0 || tids.includes(classId)) return c;
+    }
+    return null;
+  };
+
+  const openEodForClass = (classId: number) => {
+    setEodConstraint(findEodForClass(classId));
+    setEodPreselected([classId]);
+    setEodOpen(true);
+  };
+
+  const openEodForGrade = (gradeId: number) => {
+    const gradeClassIds = classes.filter((c) => c.grade_id === gradeId).map((c) => c.id);
+    // Find a constraint that covers these classes
+    const existing = constraints.find((c) => {
+      if (c.rule_type !== "CLASS_END_TIME" || !c.is_active) return false;
+      const tids = (c.parameters?.target_class_ids as number[]) ?? [];
+      if (tids.length === 0) return true; // applies to all
+      return gradeClassIds.some((id) => tids.includes(id));
+    });
+    setEodConstraint(existing ?? null);
+    setEodPreselected(gradeClassIds);
+    setEodOpen(true);
+  };
 
   const classHoursSummary = useMemo(
     () => computeAllClassHours(allRequirements, clusters),
@@ -335,6 +608,17 @@ export default function ClassesPage() {
                   <Button
                     variant="ghost"
                     size="icon"
+                    title="אילוץ סוף יום"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openEodForGrade(g.id);
+                    }}
+                  >
+                    <Clock className="h-4 w-4 text-amber-600" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={(e) => {
                       e.stopPropagation();
                       setEditingGrade(g);
@@ -355,7 +639,7 @@ export default function ClassesPage() {
                   </Button>
                 </div>
               ),
-              className: "w-24",
+              className: "w-32",
             },
           ]}
           emptyMessage="אין שכבות — הוסף שכבה חדשה"
@@ -448,6 +732,17 @@ export default function ClassesPage() {
                   <Button
                     variant="ghost"
                     size="icon"
+                    title="אילוץ סוף יום"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openEodForClass(c.id);
+                    }}
+                  >
+                    <Clock className="h-4 w-4 text-amber-600" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     title="צפה במערכת"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -503,6 +798,17 @@ export default function ClassesPage() {
           classGroup={editingClass}
           grades={grades}
           schoolId={schoolId}
+        />
+      )}
+
+      {eodOpen && (
+        <EndOfDayConstraintDialog
+          open={eodOpen}
+          onClose={() => setEodOpen(false)}
+          constraint={eodConstraint}
+          schoolId={schoolId}
+          allClasses={classes}
+          preselectedClassIds={eodPreselected}
         />
       )}
 
