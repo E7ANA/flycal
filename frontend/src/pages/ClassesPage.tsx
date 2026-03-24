@@ -18,54 +18,66 @@ import { Input } from "@/components/common/Input";
 import { Select } from "@/components/common/Select";
 import { Label } from "@/components/common/Label";
 import { Badge } from "@/components/common/Badge";
-import { DAY_LABELS_SHORT, DAYS_ORDER } from "@/lib/constraints";
+import { DAY_LABELS, DAYS_ORDER } from "@/lib/constraints";
 import type { Grade, ClassGroup, Constraint } from "@/types/models";
 
-// ─── End-of-Day Constraint Editor ────────────────────────
-// Used for both grades and classes
-function EndOfDayEditor({
+// ─── CLASS_END_TIME inline editor ────────────────────────
+// Full editor with days selection + min/max period, inside a dialog
+function EndOfDayDialog({
+  open,
+  onClose,
   constraint,
   schoolId,
   targetType,
   targetId,
   targetName,
-  inheritedConstraint,
 }: {
+  open: boolean;
+  onClose: () => void;
   constraint: Constraint | undefined;
   schoolId: number;
   targetType: "GRADE" | "CLASS";
   targetId: number;
   targetName: string;
-  inheritedConstraint?: Constraint;
 }) {
   const qc = useQueryClient();
-  const [editing, setEditing] = useState(false);
-  const [maxPeriods, setMaxPeriods] = useState<string>("");
+  const params = constraint?.parameters ?? {};
+  const [days, setDays] = useState<string[]>((params.days as string[]) ?? [...DAYS_ORDER]);
+  const [minPeriod, setMinPeriod] = useState<number>((params.min_period as number) ?? 6);
+  const [maxPeriod, setMaxPeriod] = useState<number>((params.max_period as number) ?? 8);
+  const [isHard, setIsHard] = useState(constraint?.type === "HARD" || !constraint);
 
   useEffect(() => {
     if (constraint) {
-      setMaxPeriods(String(constraint.parameters?.max_periods ?? ""));
+      const p = constraint.parameters ?? {};
+      setDays((p.days as string[]) ?? [...DAYS_ORDER]);
+      setMinPeriod((p.min_period as number) ?? 6);
+      setMaxPeriod((p.max_period as number) ?? 8);
+      setIsHard(constraint.type === "HARD");
     } else {
-      setMaxPeriods("");
+      setDays([...DAYS_ORDER]);
+      setMinPeriod(6);
+      setMaxPeriod(8);
+      setIsHard(true);
     }
-  }, [constraint]);
+  }, [constraint, open]);
+
+  const toggleDay = (d: string) => {
+    setDays((prev) =>
+      prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d],
+    );
+  };
 
   const saveMut = useMutation({
     mutationFn: async () => {
-      const val = parseInt(maxPeriods);
-      if (!val || val < 1) {
-        // Delete constraint if clearing
-        if (constraint) await deleteConstraint(constraint.id);
-        return;
-      }
       const payload = {
         school_id: schoolId,
-        name: `סוף יום — ${targetName}`,
-        category: targetType === "GRADE" ? "GLOBAL" as const : "CLASS" as const,
-        type: "HARD" as const,
-        weight: 100,
-        rule_type: "CLASS_DAY_LENGTH_LIMIT" as const,
-        parameters: { max_periods: val, day: "ALL" },
+        name: `אילוץ סוף יום — ${targetName}`,
+        category: targetType === "GRADE" ? ("GLOBAL" as const) : ("CLASS" as const),
+        type: isHard ? ("HARD" as const) : ("SOFT" as const),
+        weight: isHard ? 100 : 80,
+        rule_type: "CLASS_END_TIME" as const,
+        parameters: { days, min_period: minPeriod, max_period: maxPeriod },
         target_type: targetType,
         target_id: targetId,
         is_active: true,
@@ -78,87 +90,145 @@ function EndOfDayEditor({
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["constraints", schoolId] });
-      setEditing(false);
-      toast.success("אילוץ סוף יום עודכן");
+      toast.success("אילוץ סוף יום נשמר");
+      onClose();
     },
-    onError: () => toast.error("שגיאה בעדכון אילוץ"),
+    onError: () => toast.error("שגיאה בשמירת אילוץ"),
   });
 
   const removeMut = useMutation({
     mutationFn: () => deleteConstraint(constraint!.id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["constraints", schoolId] });
-      setMaxPeriods("");
-      setEditing(false);
       toast.success("אילוץ סוף יום הוסר");
+      onClose();
     },
   });
 
-  if (editing) {
-    return (
-      <div className="flex items-center gap-1">
-        <input
-          type="number"
-          min={1}
-          max={10}
-          value={maxPeriods}
-          onChange={(e) => setMaxPeriods(e.target.value)}
-          className="w-14 rounded border border-border bg-background px-1.5 py-0.5 text-center text-sm"
-          autoFocus
-          onKeyDown={(e) => {
-            if (e.key === "Enter") saveMut.mutate();
-            if (e.key === "Escape") setEditing(false);
-          }}
-        />
-        <Button size="icon" variant="ghost" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
-          <span className="text-xs">V</span>
-        </Button>
-        {constraint && (
-          <Button size="icon" variant="ghost" onClick={() => removeMut.mutate()} disabled={removeMut.isPending}>
-            <Trash2 className="h-3 w-3 text-destructive" />
+  return (
+    <Dialog open={open} onClose={onClose}>
+      <DialogHeader>
+        <DialogTitle>אילוץ סוף יום — {targetName}</DialogTitle>
+      </DialogHeader>
+      <div className="space-y-4">
+        <div>
+          <Label>ימים</Label>
+          <div className="flex flex-wrap gap-1 mt-1">
+            {DAYS_ORDER.map((d) => {
+              const selected = days.includes(d);
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  className={`px-3 py-1.5 text-sm rounded border cursor-pointer transition-colors ${
+                    selected
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-muted text-muted-foreground border-border"
+                  }`}
+                  onClick={() => toggleDay(d)}
+                >
+                  {DAY_LABELS[d]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor="eod-min">משעה (מינימום)</Label>
+            <Input
+              id="eod-min"
+              type="number"
+              min={1}
+              max={10}
+              value={minPeriod}
+              onChange={(e) => setMinPeriod(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <Label htmlFor="eod-max">עד שעה (מקסימום)</Label>
+            <Input
+              id="eod-max"
+              type="number"
+              min={1}
+              max={10}
+              value={maxPeriod}
+              onChange={(e) => setMaxPeriod(Number(e.target.value))}
+            />
+          </div>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          הכיתה תסיים את הלימודים בין שעה {minPeriod} לשעה {maxPeriod} בימים הנבחרים.
+        </p>
+
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={isHard}
+            onChange={(e) => setIsHard(e.target.checked)}
+            className="rounded border-border"
+          />
+          <span className="text-sm">אילוץ קשיח (חובה)</span>
+        </label>
+
+        <DialogFooter>
+          <Button onClick={() => saveMut.mutate()} disabled={saveMut.isPending || days.length === 0}>
+            {saveMut.isPending ? "שומר..." : "שמור"}
           </Button>
-        )}
+          {constraint && (
+            <Button
+              variant="destructive"
+              onClick={() => removeMut.mutate()}
+              disabled={removeMut.isPending}
+            >
+              הסר אילוץ
+            </Button>
+          )}
+          <Button variant="outline" onClick={onClose}>
+            ביטול
+          </Button>
+        </DialogFooter>
       </div>
-    );
-  }
+    </Dialog>
+  );
+}
 
+// Badge display for end-of-day constraint in the table
+function EndOfDayBadge({
+  constraint,
+  inheritedConstraint,
+  onClick,
+}: {
+  constraint: Constraint | undefined;
+  inheritedConstraint?: Constraint;
+  onClick: () => void;
+}) {
   if (constraint) {
+    const p = constraint.parameters ?? {};
     return (
-      <button
-        type="button"
-        onClick={() => setEditing(true)}
-        className="cursor-pointer"
-        title="לחץ לעריכה"
-      >
+      <button type="button" onClick={onClick} className="cursor-pointer" title="לחץ לעריכה">
         <Badge variant="default" className="text-xs">
-          שעה {constraint.parameters?.max_periods}
+          {p.min_period}–{p.max_period}
         </Badge>
       </button>
     );
   }
-
   if (inheritedConstraint) {
+    const p = inheritedConstraint.parameters ?? {};
     return (
-      <button
-        type="button"
-        onClick={() => {
-          setMaxPeriods(String(inheritedConstraint.parameters?.max_periods ?? ""));
-          setEditing(true);
-        }}
-        className="cursor-pointer"
-        title="ירושה משכבה — לחץ ל-override"
-      >
+      <button type="button" onClick={onClick} className="cursor-pointer" title="ירושה משכבה — לחץ ל-override">
         <Badge variant="outline" className="text-xs opacity-60">
-          שעה {inheritedConstraint.parameters?.max_periods} (שכבה)
+          {p.min_period}–{p.max_period} (שכבה)
         </Badge>
       </button>
     );
   }
-
   return (
     <button
       type="button"
-      onClick={() => setEditing(true)}
+      onClick={onClick}
       className="cursor-pointer text-muted-foreground hover:text-foreground"
       title="הוסף אילוץ סוף יום"
     >
@@ -385,6 +455,13 @@ export default function ClassesPage() {
   const [editingClass, setEditingClass] = useState<ClassGroup | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ type: "grade" | "class"; id: number; name: string } | null>(null);
 
+  // End-of-day dialog state
+  const [eodDialog, setEodDialog] = useState<{
+    targetType: "GRADE" | "CLASS";
+    targetId: number;
+    targetName: string;
+  } | null>(null);
+
   const { data: grades = [] } = useQuery({
     queryKey: ["grades", schoolId],
     queryFn: () => fetchGrades(schoolId!),
@@ -420,12 +497,12 @@ export default function ClassesPage() {
     [allRequirements, clusters],
   );
 
-  // Build end-of-day constraint lookups
+  // Build end-of-day constraint lookups (CLASS_END_TIME)
   const endOfDayConstraints = useMemo(() => {
     const byGrade: Record<number, Constraint> = {};
     const byClass: Record<number, Constraint> = {};
     for (const c of constraints) {
-      if (c.rule_type !== "CLASS_DAY_LENGTH_LIMIT") continue;
+      if (c.rule_type !== "CLASS_END_TIME") continue;
       if (!c.is_active) continue;
       if (c.target_type === "GRADE" && c.target_id) {
         byGrade[c.target_id] = c;
@@ -435,6 +512,13 @@ export default function ClassesPage() {
     }
     return { byGrade, byClass };
   }, [constraints]);
+
+  // Find constraint for the current eodDialog target
+  const eodConstraint = eodDialog
+    ? eodDialog.targetType === "GRADE"
+      ? endOfDayConstraints.byGrade[eodDialog.targetId]
+      : endOfDayConstraints.byClass[eodDialog.targetId]
+    : undefined;
 
   const toggleHomeroomMut = useMutation({
     mutationFn: ({ id, value }: { id: number; value: boolean }) =>
@@ -501,12 +585,9 @@ export default function ClassesPage() {
             {
               header: "סוף יום",
               accessor: (g) => (
-                <EndOfDayEditor
+                <EndOfDayBadge
                   constraint={endOfDayConstraints.byGrade[g.id]}
-                  schoolId={schoolId}
-                  targetType="GRADE"
-                  targetId={g.id}
-                  targetName={`שכבה ${g.name}`}
+                  onClick={() => setEodDialog({ targetType: "GRADE", targetId: g.id, targetName: `שכבה ${g.name}` })}
                 />
               ),
             },
@@ -572,27 +653,18 @@ export default function ClassesPage() {
             },
             {
               header: "שעות רגילות",
-              accessor: (c) => {
-                const s = classHoursSummary[c.id];
-                return s?.regular || "—";
-              },
+              accessor: (c) => classHoursSummary[c.id]?.regular || "—",
             },
             {
               header: "שעות הקבצות",
-              accessor: (c) => {
-                const s = classHoursSummary[c.id];
-                return s?.grouped || "—";
-              },
+              accessor: (c) => classHoursSummary[c.id]?.grouped || "—",
             },
             {
               header: "שעות משותפים",
-              accessor: (c) => {
-                const s = classHoursSummary[c.id];
-                return s?.shared || "—";
-              },
+              accessor: (c) => classHoursSummary[c.id]?.shared || "—",
             },
             {
-              header: "סה״כ שעות",
+              header: "סה״כ",
               accessor: (c) => {
                 const s = classHoursSummary[c.id];
                 return s?.total ? (
@@ -603,30 +675,24 @@ export default function ClassesPage() {
             {
               header: "סוף יום",
               accessor: (c) => (
-                <EndOfDayEditor
+                <EndOfDayBadge
                   constraint={endOfDayConstraints.byClass[c.id]}
-                  schoolId={schoolId}
-                  targetType="CLASS"
-                  targetId={c.id}
-                  targetName={c.name}
                   inheritedConstraint={endOfDayConstraints.byGrade[c.grade_id]}
+                  onClick={() => setEodDialog({ targetType: "CLASS", targetId: c.id, targetName: c.name })}
                 />
               ),
             },
             {
-              header: "מחנכת יומית",
+              header: "מחנכת",
               accessor: (c) => (
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    toggleHomeroomMut.mutate({
-                      id: c.id,
-                      value: !c.homeroom_daily_required,
-                    });
+                    toggleHomeroomMut.mutate({ id: c.id, value: !c.homeroom_daily_required });
                   }}
                   className="cursor-pointer"
-                  title="לחץ להחלפה בין חובה/מועדף"
+                  title="לחץ להחלפה"
                 >
                   {c.homeroom_daily_required ? (
                     <Badge variant="default" className="text-xs">חובה</Badge>
@@ -640,36 +706,16 @@ export default function ClassesPage() {
               header: "פעולות",
               accessor: (c) => (
                 <div className="flex gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    title="צפה במערכת"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigate(`/results?view=class&id=${c.id}`);
-                    }}
-                  >
+                  <Button variant="ghost" size="icon" title="מערכת"
+                    onClick={(e) => { e.stopPropagation(); navigate(`/results?view=class&id=${c.id}`); }}>
                     <Calendar className="h-4 w-4 text-primary" />
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditingClass(c);
-                      setClassDialogOpen(true);
-                    }}
-                  >
+                  <Button variant="ghost" size="icon"
+                    onClick={(e) => { e.stopPropagation(); setEditingClass(c); setClassDialogOpen(true); }}>
                     <Pencil className="h-4 w-4" />
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setDeleteTarget({ type: "class", id: c.id, name: c.name });
-                    }}
-                  >
+                  <Button variant="ghost" size="icon"
+                    onClick={(e) => { e.stopPropagation(); setDeleteTarget({ type: "class", id: c.id, name: c.name }); }}>
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </Button>
                 </div>
@@ -698,6 +744,18 @@ export default function ClassesPage() {
           classGroup={editingClass}
           grades={grades}
           schoolId={schoolId}
+        />
+      )}
+
+      {eodDialog && (
+        <EndOfDayDialog
+          open={!!eodDialog}
+          onClose={() => setEodDialog(null)}
+          constraint={eodConstraint}
+          schoolId={schoolId}
+          targetType={eodDialog.targetType}
+          targetId={eodDialog.targetId}
+          targetName={eodDialog.targetName}
         />
       )}
 
