@@ -36,8 +36,6 @@ export const RULE_TYPE_LABELS: Record<RuleType, string> = {
   MINIMIZE_TEACHER_DAYS: "מינימום ימי מורה",
   CLASS_DAY_LENGTH_LIMIT: "הגבלת אורך יום לכיתה",
   TEACHER_FIRST_LAST_PREFERENCE: "העדפת שעה ראשונה/אחרונה",
-  GRADE_ACTIVITY_HOURS: "שעות פעילות שכבה",
-  SHORT_DAYS_FLEXIBLE: "ימים קצרים גמישים",
   COMPACT_SCHOOL_DAY: "יום רציף מלא",
   HOMEROOM_EARLY: "מחנכת בתחילת היום",
   CLASS_END_TIME: "סוף יום לכיתה (שעת סיום)",

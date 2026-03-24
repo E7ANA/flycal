@@ -32,7 +32,7 @@ def generate_timeslots(school_id: int, db: Session = Depends(get_db)):
     slots = []
     for day in days:
         max_period = day_map.get(day.value, school.periods_per_day)
-        for period in range(1, max_period + 1):
+        for period in range(0, max_period + 1):
             is_available = period not in school.break_slots
             slot = TimeSlot(
                 school_id=school_id,

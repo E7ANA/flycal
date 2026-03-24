@@ -5,7 +5,7 @@ Run from the backend directory:
 
 Algorithm:
   1. Load solver data for school_id=3
-  2. Build full model (system + all user constraints including GRADE_ACTIVITY_HOURS)
+  2. Build full model (system + all user constraints)
   3. Quick-solve (60s). If feasible, exit.
   4. If INFEASIBLE, try many small relaxations independently and rank by "drama score".
 """
@@ -71,8 +71,8 @@ class RelaxationResult:
 
 # ── Helper: build model ────────────────────────────────────────────────
 
-def _build_full_model(data, grade_activity_constraints, all_user_constraints):
-    """Build model with system constraints + GRADE_ACTIVITY_HOURS + brain + all user constraints."""
+def _build_full_model(data, all_user_constraints):
+    """Build model with system constraints + brain + all user constraints."""
     from app.solver.model_builder import create_variables, add_system_constraints
     from app.solver.constraint_compiler import _compile_one
     from app.solver.brain import apply_brain_constraints
@@ -80,25 +80,20 @@ def _build_full_model(data, grade_activity_constraints, all_user_constraints):
     m = cp_model.CpModel()
     v = create_variables(m, data)
     add_system_constraints(m, data, v)
-    for c in grade_activity_constraints:
-        _compile_one(m, data, v, c)
     for c in all_user_constraints:
         _compile_one(m, data, v, c)
     apply_brain_constraints(m, data, v)
     return m, v
 
 
-def _build_base_model(data, grade_activity_constraints):
-    """Build model with system constraints + GRADE_ACTIVITY_HOURS + brain only."""
+def _build_base_model(data):
+    """Build model with system constraints + brain only."""
     from app.solver.model_builder import create_variables, add_system_constraints
-    from app.solver.constraint_compiler import _compile_one
     from app.solver.brain import apply_brain_constraints
 
     m = cp_model.CpModel()
     v = create_variables(m, data)
     add_system_constraints(m, data, v)
-    for c in grade_activity_constraints:
-        _compile_one(m, data, v, c)
     apply_brain_constraints(m, data, v)
     return m, v
 
@@ -277,17 +272,7 @@ def _run_diagnosis(db, start_time):
     # ── Step 2: Load constraints ─────────────────────────────────────
     print("שלב 2: טעינת אילוצים...")
 
-    grade_activity_constraints = (
-        db.query(Constraint)
-        .filter(
-            Constraint.school_id == SCHOOL_ID,
-            Constraint.rule_type == "GRADE_ACTIVITY_HOURS",
-            Constraint.is_active == True,
-        )
-        .all()
-    )
-
-    all_user_constraints = (
+    user_constraints = (
         db.query(Constraint)
         .filter(
             Constraint.school_id == SCHOOL_ID,
@@ -295,20 +280,16 @@ def _run_diagnosis(db, start_time):
         )
         .all()
     )
-    # Exclude GRADE_ACTIVITY_HOURS from user constraints (they're in the base)
-    gah_ids = {c.id for c in grade_activity_constraints}
-    user_constraints = [c for c in all_user_constraints if c.id not in gah_ids]
 
     hard_constraints = [c for c in user_constraints if c.type == "HARD"]
     soft_constraints = [c for c in user_constraints if c.type == "SOFT"]
 
-    print(f"  GRADE_ACTIVITY_HOURS: {len(grade_activity_constraints)}")
     print(f"  אילוצי משתמש: {len(user_constraints)} (HARD: {len(hard_constraints)}, SOFT: {len(soft_constraints)})")
     print()
 
     # ── Step 3: Full solve ───────────────────────────────────────────
     print("שלב 3: ניסיון פתרון מלא (60 שניות)...")
-    m_full, v_full = _build_full_model(data, grade_activity_constraints, user_constraints)
+    m_full, v_full = _build_full_model(data, user_constraints)
     status, status_name, elapsed = _quick_solve(m_full, timeout=FULL_TIMEOUT)
     print(f"  תוצאה: {status_name} ({elapsed:.1f}s)")
 
@@ -363,45 +344,11 @@ def _run_diagnosis(db, start_time):
         remaining = [uc for uc in user_constraints if uc.id != c.id]
 
         def build_without(remaining=remaining):
-            return _build_full_model(data, grade_activity_constraints, remaining)
+            return _build_full_model(data,remaining)
 
         found = try_relaxation("A", desc, drama=5, build_fn=build_without)
         if not found:
             print("    ✗ עדיין לא פתיר")
-
-    print()
-
-    # ── Strategy B: Add one extra period to one day for one grade ─────
-    print("אסטרטגיה ב': הוספת שעה אחת ליום אחד בשכבה")
-    b_attempts = []
-    for gah in grade_activity_constraints:
-        grade_id = gah.target_id
-        params = gah.parameters or {}
-        pmap = params.get("periods_per_day_map", {})
-        for day, periods in pmap.items():
-            b_attempts.append((gah, grade_id, day, periods))
-
-    print(f"  {len(b_attempts)} שילובים לבדוק...")
-
-    for i, (gah, grade_id, day, periods) in enumerate(b_attempts):
-        new_periods = periods + 1
-        desc = f"הוספת שעה ב{_day_short(day)} ל{gname(grade_id)}: {periods}→{new_periods}"
-        print(f"  [{i+1}/{len(b_attempts)}] בודק: {desc}...", end=" ", flush=True)
-
-        new_pmap = dict((gah.parameters or {}).get("periods_per_day_map", {}))
-        new_pmap[day] = new_periods
-        new_params = dict(gah.parameters or {})
-        new_params["periods_per_day_map"] = new_pmap
-
-        modified_gah = _clone_constraint_with_params(gah, new_params)
-        other_gahs = [g for g in grade_activity_constraints if g.id != gah.id]
-
-        def build_extra_period(modified_gah=modified_gah, other_gahs=other_gahs):
-            return _build_full_model(data, [modified_gah] + other_gahs, user_constraints)
-
-        found = try_relaxation("B", desc, drama=3, build_fn=build_extra_period)
-        if not found:
-            print("    ✗")
 
     print()
 
@@ -450,7 +397,7 @@ def _run_diagnosis(db, start_time):
             orig_blocked = data.teacher_blocked_slots
             data.teacher_blocked_slots = new_blocked
             try:
-                return _build_full_model(data, grade_activity_constraints, user_constraints)
+                return _build_full_model(data,user_constraints)
             finally:
                 data.teacher_blocked_slots = orig_blocked
 
@@ -487,7 +434,7 @@ def _run_diagnosis(db, start_time):
         def build_reduce(req=req, orig_hours=orig_hours):
             req.hours_per_week = orig_hours - 1
             try:
-                return _build_full_model(data, grade_activity_constraints, user_constraints)
+                return _build_full_model(data,user_constraints)
             finally:
                 req.hours_per_week = orig_hours
 
@@ -513,7 +460,7 @@ def _run_diagnosis(db, start_time):
         modified = [softened if uc.id == c.id else uc for uc in user_constraints]
 
         def build_softened(modified=modified):
-            return _build_full_model(data, grade_activity_constraints, modified)
+            return _build_full_model(data,modified)
 
         found = try_relaxation("E", desc, drama=3, build_fn=build_softened)
         if not found:
@@ -571,7 +518,7 @@ def _run_diagnosis(db, start_time):
             orig_blocked = data.teacher_blocked_slots
             data.teacher_blocked_slots = new_blocked
             try:
-                return _build_full_model(data, grade_activity_constraints, user_constraints)
+                return _build_full_model(data,user_constraints)
             finally:
                 data.teacher_blocked_slots = orig_blocked
 
@@ -611,7 +558,7 @@ def _run_diagnosis(db, start_time):
                     modified.append(uc)
 
             def build_pair(modified=modified):
-                return _build_full_model(data, grade_activity_constraints, modified)
+                return _build_full_model(data,modified)
 
             found = try_relaxation("G", desc, drama=5, build_fn=build_pair)
             if not found:
@@ -621,48 +568,7 @@ def _run_diagnosis(db, start_time):
                 print("  (חריגה מזמן)")
                 break
     else:
-        # We have single results — try combining pairs of different strategies
-        # e.g., soften one constraint + add one period
-        single_descs = [(r.strategy, r.description_he) for r in results[:5]]
-        print(f"  נמצאו {len(results)} הרפיות בודדות, מנסה שילובים...")
-
-        # Try combining: soften a constraint + add a period to a grade
-        combo_attempted = 0
-        for c in hard_constraints[:10]:
-            for gah in grade_activity_constraints:
-                params = gah.parameters or {}
-                pmap = params.get("periods_per_day_map", {})
-                for day, periods in pmap.items():
-                    new_pmap = dict(pmap)
-                    new_pmap[day] = periods + 1
-                    new_params = dict(params)
-                    new_params["periods_per_day_map"] = new_pmap
-
-                    modified_gah = _clone_constraint_with_params(gah, new_params)
-                    other_gahs = [g for g in grade_activity_constraints if g.id != gah.id]
-                    softened = _clone_as_soft(c, weight=50)
-                    modified_uc = [softened if uc.id == c.id else uc for uc in user_constraints]
-
-                    desc = (f"שינוי '{c.name}' ל-SOFT + "
-                            f"הוספת שעה ב{_day_short(day)} ל{gname(gah.target_id)}")
-
-                    print(f"  [{combo_attempted+1}] בודק...", end=" ", flush=True)
-
-                    def build_combo(modified_gah=modified_gah, other_gahs=other_gahs,
-                                    modified_uc=modified_uc):
-                        return _build_full_model(data, [modified_gah] + other_gahs, modified_uc)
-
-                    found = try_relaxation("G", desc, drama=5, build_fn=build_combo)
-                    if not found:
-                        print("    ✗")
-
-                    combo_attempted += 1
-                    if combo_attempted >= 30 or time.time() - start_time > 540:
-                        break
-                if combo_attempted >= 30 or time.time() - start_time > 540:
-                    break
-            if combo_attempted >= 30 or time.time() - start_time > 540:
-                break
+        print(f"  נמצאו {len(results)} הרפיות בודדות — שילובים נוספים לא נדרשים.")
 
     print()
 
@@ -707,14 +613,13 @@ def _run_diagnosis(db, start_time):
     print("  ── סיכום לפי אסטרטגיה ──")
     strategy_names = {
         "A": "הסרת אילוץ HARD",
-        "B": "הוספת שעה לשכבה",
         "C": "ביטול חסימת מורה (יום)",
         "D": "הפחתת שעה מדרישה",
         "E": "HARD → SOFT",
         "F": "ביטול חסימה ביום אשכול",
         "G": "שילוב 2 שינויים",
     }
-    for strategy in "ABCDEFG":
+    for strategy in "ACDEFG":
         if strategy in by_strategy:
             count = len(by_strategy[strategy])
             best = min(by_strategy[strategy], key=lambda r: r.drama_score)

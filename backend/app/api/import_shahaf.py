@@ -471,7 +471,6 @@ def _do_import(data: ImportRequest, db: Session):
                 school_id=school_id,
                 name=c["name"],
                 grade_id=grade_id,
-                num_students=c.get("students", 0),
                 shahaf_id=c["shahaf_id"],
             )
             db.add(cg)

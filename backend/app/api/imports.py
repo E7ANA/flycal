@@ -112,13 +112,10 @@ async def import_classes(
             continue
 
         grade = grade_by_name[grade_name.strip()]
-        num_students = _get_int(row, ["מספר_תלמידים", "students", "תלמידים"], 30)
-
         cg = ClassGroup(
             school_id=school_id,
             name=name.strip(),
             grade_id=grade.id,
-            num_students=num_students,
         )
         db.add(cg)
         created += 1

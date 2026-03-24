@@ -24,7 +24,6 @@ export interface ClassGroup {
   name: string;
   grade_id: number;
   school_id: number;
-  num_students: number;
   homeroom_daily_required: boolean;
 }
 
@@ -175,8 +174,6 @@ export type RuleType =
   | "MINIMIZE_TEACHER_DAYS"
   | "CLASS_DAY_LENGTH_LIMIT"
   | "TEACHER_FIRST_LAST_PREFERENCE"
-  | "GRADE_ACTIVITY_HOURS"
-  | "SHORT_DAYS_FLEXIBLE"
   | "COMPACT_SCHOOL_DAY"
   | "HOMEROOM_EARLY"
   | "CLASS_END_TIME"

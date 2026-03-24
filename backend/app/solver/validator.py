@@ -202,37 +202,17 @@ def _check_capacity(data: SolverData, n: _Names) -> list[ValidationIssue]:
     for cg in data.class_groups:
         hours = class_hours.get(cg.id, 0)
 
-        # Check against grade-specific available slots if GRADE_ACTIVITY_HOURS exists
-        grade_map = data.grade_periods_map.get(cg.grade_id) if hasattr(cg, "grade_id") else None
-        if grade_map:
-            grade_available = sum(grade_map.values())
-        else:
-            grade_available = total_available
-
-        if hours > grade_available:
-            if grade_map:
-                day_detail = ", ".join(
-                    f"{_day(d)}: {p} שעות" for d, p in grade_map.items()
-                )
-                issues.append(ValidationIssue(
-                    level="error", category="capacity",
-                    message=(
-                        f"כיתה {cg.name}: {hours} שעות נדרשות אך רק {grade_available} "
-                        f"משבצות זמינות לפי שעות פעילות השכבה ({day_detail})"
-                    ),
-                    details={"class_id": cg.id, "hours": hours, "available": grade_available},
-                ))
-            else:
-                issues.append(ValidationIssue(
-                    level="error", category="capacity",
-                    message=f"כיתה {cg.name}: {hours} שעות נדרשות אך רק {grade_available} משבצות זמינות",
-                    details={"class_id": cg.id, "hours": hours, "available": grade_available},
-                ))
-        elif hours > grade_available * 0.9:
+        if hours > total_available:
+            issues.append(ValidationIssue(
+                level="error", category="capacity",
+                message=f"כיתה {cg.name}: {hours} שעות נדרשות אך רק {total_available} משבצות זמינות",
+                details={"class_id": cg.id, "hours": hours, "available": total_available},
+            ))
+        elif hours > total_available * 0.9:
             issues.append(ValidationIssue(
                 level="warning", category="capacity",
-                message=f"כיתה {cg.name}: {hours}/{grade_available} משבצות — עומס גבוה מאוד",
-                details={"class_id": cg.id, "hours": hours, "available": grade_available},
+                message=f"כיתה {cg.name}: {hours}/{total_available} משבצות — עומס גבוה מאוד",
+                details={"class_id": cg.id, "hours": hours, "available": total_available},
             ))
 
     return issues

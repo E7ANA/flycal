@@ -121,7 +121,6 @@ function ClassFormDialog({
   const qc = useQueryClient();
   const [name, setName] = useState(classGroup?.name ?? "");
   const [gradeId, setGradeId] = useState(classGroup?.grade_id ?? (grades[0]?.id ?? 0));
-  const [numStudents, setNumStudents] = useState(classGroup?.num_students ?? 30);
   const [homeroomDailyRequired, setHomeroomDailyRequired] = useState(
     classGroup?.homeroom_daily_required ?? false,
   );
@@ -132,7 +131,6 @@ function ClassFormDialog({
         school_id: schoolId,
         name,
         grade_id: gradeId,
-        num_students: numStudents,
         homeroom_daily_required: homeroomDailyRequired,
       }),
     onSuccess: () => {
@@ -148,7 +146,6 @@ function ClassFormDialog({
       updateClass(classGroup!.id, {
         name,
         grade_id: gradeId,
-        num_students: numStudents,
         homeroom_daily_required: homeroomDailyRequired,
       }),
     onSuccess: () => {
@@ -198,16 +195,6 @@ function ClassFormDialog({
               </option>
             ))}
           </Select>
-        </div>
-        <div>
-          <Label htmlFor="class-students">מספר תלמידים</Label>
-          <Input
-            id="class-students"
-            type="number"
-            min={0}
-            value={numStudents}
-            onChange={(e) => setNumStudents(Number(e.target.value))}
-          />
         </div>
         <label className="flex items-center gap-2 cursor-pointer">
           <input
@@ -401,7 +388,6 @@ export default function ClassesPage() {
               header: "שכבה",
               accessor: (c) => gradeMap[c.grade_id] ?? "—",
             },
-            { header: "תלמידים", accessor: "num_students" },
             {
               header: "שעות רגילות",
               accessor: (c) => {

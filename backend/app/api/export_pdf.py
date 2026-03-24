@@ -379,7 +379,7 @@ def _render_class_page(
         html += f"<th>{DAY_LABELS.get(day, day)}</th>"
     html += "</tr></thead>\n<tbody>\n"
 
-    for period in range(1, max_period + 1):
+    for period in range(0, max_period + 1):
         html += f'<tr><td class="period-cell">{period}</td>'
         for day in days:
             slot = grid.get((day, period), [])
@@ -473,7 +473,7 @@ def _render_teacher_page(
         html += f"<th>{DAY_LABELS.get(day, day)}</th>"
     html += "</tr></thead>\n<tbody>\n"
 
-    for period in range(1, max_period + 1):
+    for period in range(0, max_period + 1):
         html += f'<tr><td class="period-cell">{period}</td>'
         for day in days:
             slot = grid.get((day, period), [])
@@ -516,7 +516,7 @@ def _render_meetings_page(
         html += f"<th>{DAY_LABELS.get(day, day)}</th>"
     html += "</tr></thead>\n<tbody>\n"
 
-    for period in range(1, max_period + 1):
+    for period in range(0, max_period + 1):
         html += f'<tr><td class="period-cell">{period}</td>'
         for day in days:
             entries = grid.get((day, period), [])

@@ -38,7 +38,6 @@ class ClassGroup(Base):
     school_id: Mapped[int] = mapped_column(ForeignKey("schools.id"))
     name: Mapped[str] = mapped_column(String(100))
     grade_id: Mapped[int] = mapped_column(ForeignKey("grades.id"))
-    num_students: Mapped[int] = mapped_column(Integer, default=0)
     # When True: homeroom teacher MUST teach this class every day she's at school (HARD)
     # When False (default): preferred but not mandatory (SOFT)
     homeroom_daily_required: Mapped[bool] = mapped_column(Boolean, default=False)

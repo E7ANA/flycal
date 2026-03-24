@@ -141,7 +141,7 @@ def create_class_groups(db, school_id: int, grades: dict) -> dict:
     # Grade ט: 2 parallel regular classes
     for i in range(1, 3):
         name = f"ט{i}"
-        cg = ClassGroup(school_id=school_id, name=name, grade_id=grades["ט"].id, num_students=30)
+        cg = ClassGroup(school_id=school_id, name=name, grade_id=grades["ט"].id)
         db.add(cg)
         db.flush()
         classes[f"ט_{i}"] = cg
@@ -150,7 +150,7 @@ def create_class_groups(db, school_id: int, grades: dict) -> dict:
     # Grade י: 2 parallel regular classes
     for i in range(1, 3):
         name = f"י{i}"
-        cg = ClassGroup(school_id=school_id, name=name, grade_id=grades["י"].id, num_students=30)
+        cg = ClassGroup(school_id=school_id, name=name, grade_id=grades["י"].id)
         db.add(cg)
         db.flush()
         classes[f"י_{i}"] = cg
@@ -158,7 +158,7 @@ def create_class_groups(db, school_id: int, grades: dict) -> dict:
 
     # Grade יא: מח'א, מח'ב, ח"מ
     for key, display_name in [("מחא", "יא-מח'א"), ("מחב", "יא-מח'ב"), ("חמ", 'יא-ח"מ')]:
-        cg = ClassGroup(school_id=school_id, name=display_name, grade_id=grades["יא"].id, num_students=30)
+        cg = ClassGroup(school_id=school_id, name=display_name, grade_id=grades["יא"].id)
         db.add(cg)
         db.flush()
         classes[f"יא_{key}"] = cg
@@ -166,7 +166,7 @@ def create_class_groups(db, school_id: int, grades: dict) -> dict:
 
     # Grade יב: מח'א, מח'ב
     for key, display_name in [("מחא", "יב-מח'א"), ("מחב", "יב-מח'ב")]:
-        cg = ClassGroup(school_id=school_id, name=display_name, grade_id=grades["יב"].id, num_students=30)
+        cg = ClassGroup(school_id=school_id, name=display_name, grade_id=grades["יב"].id)
         db.add(cg)
         db.flush()
         classes[f"יב_{key}"] = cg

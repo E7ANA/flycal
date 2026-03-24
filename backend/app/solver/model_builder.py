@@ -49,8 +49,6 @@ class SolverData:
     allowed_overlap_pairs: set[tuple[tuple[str, int], tuple[str, int]]] = field(
         default_factory=set
     )
-    # grade_id -> {day: max_period} from GRADE_ACTIVITY_HOURS constraints
-    grade_periods_map: dict[int, dict[str, int]] = field(default_factory=dict)
     # Derived lookups
     available_slots: list[tuple[str, int]] = field(default_factory=list)
     days: list[str] = field(default_factory=list)
@@ -227,23 +225,6 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
                     min_free_days_map.get(c.target_id, 0), min_days
                 )
 
-    # Load GRADE_ACTIVITY_HOURS constraints for validation
-    grade_periods_map: dict[int, dict[str, int]] = {}
-    gah_constraints = (
-        db.query(Constraint)
-        .filter(
-            Constraint.school_id == school_id,
-            Constraint.rule_type == "GRADE_ACTIVITY_HOURS",
-            Constraint.is_active == True,
-        )
-        .all()
-    )
-    for c in gah_constraints:
-        if c.target_id is not None:
-            pmap = (c.parameters or {}).get("periods_per_day_map", {})
-            if pmap:
-                grade_periods_map[c.target_id] = pmap
-
     # Load specific allowed overlap pairs
     from app.models.timetable import AllowedOverlap
     allowed_overlap_pairs: set[tuple[tuple[str, int], tuple[str, int]]] = set()
@@ -273,7 +254,6 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
         transport_priorities=transport_priorities,
         min_free_days_map=min_free_days_map,
         allowed_overlap_pairs=allowed_overlap_pairs,
-        grade_periods_map=grade_periods_map,
     )
 
 

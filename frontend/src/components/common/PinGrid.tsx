@@ -115,7 +115,7 @@ export function PinGrid({
     }
   };
 
-  const periods = Array.from({ length: maxPeriod }, (_, i) => i + 1);
+  const periods = Array.from({ length: maxPeriod + 1 }, (_, i) => i);
   const hasBlockMode = !!onBlockedChange;
   const hasAlternativeMode = !!onAlternativeChange;
 

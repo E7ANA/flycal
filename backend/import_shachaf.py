@@ -224,7 +224,6 @@ def import_data():
                 school_id=school_id,
                 name=cls_name,
                 grade_id=grade_map[grade_name].id,
-                num_students=30,
             )
             db.add(cg)
             db.flush()

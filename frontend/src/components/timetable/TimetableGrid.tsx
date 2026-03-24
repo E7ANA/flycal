@@ -126,7 +126,7 @@ export function TimetableGrid({
   presenceSlots = [],
   meetingAbsences = [],
 }: TimetableGridProps) {
-  const periods = Array.from({ length: maxPeriod }, (_, i) => i + 1);
+  const periods = Array.from({ length: maxPeriod + 1 }, (_, i) => i);
 
   // Build lookup: day+period → lesson(s)
   const grid: Record<string, ScheduledLesson[]> = {};

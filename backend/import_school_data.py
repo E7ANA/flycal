@@ -707,7 +707,6 @@ def run_import():
                 school_id=school_id,
                 name=f"{grade.name}' {num}",
                 grade_id=grade.id,
-                num_students=30,
             )
             db.add(cg)
             db.flush()

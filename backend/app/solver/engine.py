@@ -594,26 +594,11 @@ def _diagnose_infeasibility(
         solver.parameters.num_workers = _QUICK_WORKERS
         return solver.solve(model)
 
-    # Pre-load GRADE_ACTIVITY_HOURS constraints (they're effectively system constraints)
-    _grade_activity_constraints = (
-        db.query(Constraint)
-        .filter(
-            Constraint.school_id == school_id,
-            Constraint.rule_type == "GRADE_ACTIVITY_HOURS",
-            Constraint.is_active == True,
-        )
-        .all()
-    )
-
     def _build_base():
-        """Build system-only model + grade activity hours (known baseline)."""
+        """Build system-only model (known baseline)."""
         m = cp_model.CpModel()
         v = create_variables(m, data)
         add_system_constraints(m, data, v)
-        # Include GRADE_ACTIVITY_HOURS as part of the base —
-        # they define when school is in session, not optional constraints
-        for c in _grade_activity_constraints:
-            _compile_one(m, data, v, c)
         return m, v
 
     # ── Helper: build name maps ────────────────────────────────────────
@@ -904,46 +889,26 @@ def _diagnose_infeasibility(
                 ))
                 found_specific = True
 
-        # Check 2: Class capacity (hours > available slots, including grade limits)
+        # Check 2: Class capacity (hours > available slots)
         for cid, hours in c_hours_map.items():
-            # Check grade-specific limits from GRADE_ACTIVITY_HOURS
-            cg = next((c for c in data.class_groups if c.id == cid), None)
-            grade_map = data.grade_periods_map.get(cg.grade_id) if cg else None
-            effective_available = sum(grade_map.values()) if grade_map else total_available
-
-            if hours > effective_available:
-                if grade_map:
-                    day_detail = ", ".join(
-                        f"{_day_he(d)}: {p}" for d, p in grade_map.items()
-                    )
-                    conflicts.append(InfeasibilityConflict(
-                        source="system",
-                        name=f"עומס יתר: כיתה {_cname(cid)}",
-                        details=(
-                            f"לכיתה {_cname(cid)} יש {hours} שעות נדרשות "
-                            f"אבל רק {effective_available} סלוטים זמינים "
-                            f"לפי שעות פעילות השכבה ({day_detail}). "
-                            f"יש להוסיף שעות פעילות או להפחית דרישות."
-                        ),
-                    ))
-                else:
-                    conflicts.append(InfeasibilityConflict(
-                        source="system",
-                        name=f"עומס יתר: כיתה {_cname(cid)}",
-                        details=(
-                            f"לכיתה {_cname(cid)} יש {hours} שעות נדרשות "
-                            f"אבל רק {total_available} סלוטים זמינים בשבוע."
-                        ),
-                    ))
+            if hours > total_available:
+                conflicts.append(InfeasibilityConflict(
+                    source="system",
+                    name=f"עומס יתר: כיתה {_cname(cid)}",
+                    details=(
+                        f"לכיתה {_cname(cid)} יש {hours} שעות נדרשות "
+                        f"אבל רק {total_available} סלוטים זמינים בשבוע."
+                    ),
+                ))
                 found_specific = True
-            elif hours == effective_available:
+            elif hours == total_available:
                 # Zero flexibility — warn that any teacher conflict will cause failure
                 conflicts.append(InfeasibilityConflict(
                     source="system",
                     name=f"אפס גמישות: כיתה {_cname(cid)}",
                     details=(
                         f"לכיתה {_cname(cid)} יש {hours} שעות נדרשות "
-                        f"ו-{effective_available} סלוטים זמינים — אפס מרווח. "
+                        f"ו-{total_available} סלוטים זמינים — אפס מרווח. "
                         f"כל חסימת מורה עלולה לגרום לכשל. "
                         f"הסולבר ינסה, אך ייתכן שלא ימצא פתרון."
                     ),
@@ -1234,8 +1199,7 @@ def _diagnose_infeasibility(
                                         max_h = max((t.hours_per_week for t in cl.tracks if t.teacher_id), default=0)
                                         hours += max_h
                                         break
-                            gm = data.grade_periods_map.get(cg.grade_id)
-                            avail = sum(gm.values()) if gm else len(data.available_slots)
+                            avail = len(data.available_slots)
                             if hours >= avail:
                                 tight_classes.append(f"{cg.name}: {hours}/{avail}")
                         if tight_classes:
@@ -1288,8 +1252,7 @@ def _diagnose_infeasibility(
                         max_h = max((t.hours_per_week for t in cl.tracks if t.teacher_id), default=0)
                         hours += max_h
                         break
-            gm = data.grade_periods_map.get(cg.grade_id)
-            avail = sum(gm.values()) if gm else len(data.available_slots)
+            avail = len(data.available_slots)
             if hours >= avail * 0.95:
                 class_info.append(f"{cg.name}: {hours}/{avail} סלוטים")
 

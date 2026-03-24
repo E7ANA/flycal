@@ -5,7 +5,6 @@ class ClassGroupCreate(BaseModel):
     school_id: int
     name: str
     grade_id: int
-    num_students: int = 0
     homeroom_daily_required: bool = False
     shahaf_id: str | None = None
 
@@ -13,7 +12,6 @@ class ClassGroupCreate(BaseModel):
 class ClassGroupUpdate(BaseModel):
     name: str | None = None
     grade_id: int | None = None
-    num_students: int | None = None
     homeroom_daily_required: bool | None = None
     shahaf_id: str | None = None
 
@@ -23,7 +21,6 @@ class ClassGroupRead(BaseModel):
     school_id: int
     name: str
     grade_id: int
-    num_students: int
     homeroom_daily_required: bool = False
     shahaf_id: str | None = None
 

@@ -57,16 +57,16 @@ function AvailabilityGrid({
 
   const toggleDay = (day: string) => {
     const periods = periodsPerDay[day] ?? maxPeriods;
-    const allBlocked = Array.from({ length: periods }, (_, i) => i + 1).every((p) =>
+    const allBlocked = Array.from({ length: periods + 1 }, (_, i) => i).every((p) =>
       isBlocked(day, p),
     );
     if (allBlocked) {
       onChange(blockedSlots.filter((s) => s.day !== day));
     } else {
       const remaining = blockedSlots.filter((s) => s.day !== day);
-      const newSlots = Array.from({ length: periods }, (_, i) => ({
+      const newSlots = Array.from({ length: periods + 1 }, (_, i) => ({
         day,
-        period: i + 1,
+        period: i,
       }));
       onChange([...remaining, ...newSlots]);
     }
@@ -100,7 +100,7 @@ function AvailabilityGrid({
           </tr>
         </thead>
         <tbody>
-          {Array.from({ length: maxPeriods }, (_, i) => i + 1).map((period) => (
+          {Array.from({ length: maxPeriods + 1 }, (_, i) => i).map((period) => (
             <tr key={period}>
               <td className="p-1 font-medium text-muted-foreground">{period}</td>
               {days.map((day) => {

@@ -226,7 +226,7 @@ def _collect_subject_day_vars(
         for day in data.days:
             period_vars: dict[int, cp_model.IntVar] = {}
             for req in reqs:
-                for p in range(1, data.max_period_per_day.get(day, 0) + 1):
+                for p in range(0, data.max_period_per_day.get(day, 0) + 1):
                     var = variables.x.get((cg_id, s_id, req.teacher_id, day, p))
                     if var is not None:
                         if p in period_vars:
@@ -247,7 +247,7 @@ def _collect_subject_day_vars(
                 continue
             for day in data.days:
                 period_vars: dict[int, cp_model.IntVar] = {}
-                for p in range(1, data.max_period_per_day.get(day, 0) + 1):
+                for p in range(0, data.max_period_per_day.get(day, 0) + 1):
                     var = variables.x_track.get((track.id, day, p))
                     if var is not None:
                         period_vars[p] = var
@@ -315,7 +315,7 @@ def _apply_double_period_preferences(
             "var_keys": [
                 (day, p, variables.x.get((req.class_group_id, req.subject_id, req.teacher_id, day, p)))
                 for day in data.days
-                for p in range(1, data.max_period_per_day.get(day, 0) + 1)
+                for p in range(0, data.max_period_per_day.get(day, 0) + 1)
             ],
         })
 
@@ -344,7 +344,7 @@ def _apply_double_period_preferences(
             "var_keys": [
                 (day, p, variables.x_track.get((rep_track.id, day, p)))
                 for day in data.days
-                for p in range(1, data.max_period_per_day.get(day, 0) + 1)
+                for p in range(0, data.max_period_per_day.get(day, 0) + 1)
             ],
         })
 
@@ -526,7 +526,7 @@ def _apply_always_double(
         for day in data.days:
             max_p = data.max_period_per_day.get(day, 0)
             day_vars = []
-            for p in range(1, max_p + 1):
+            for p in range(0, max_p + 1):
                 var = var_getter(day, p)
                 if var is not None:
                     day_vars.append(var)
@@ -680,7 +680,7 @@ def _apply_morning_priority(
         period_penalty_terms: list[tuple[cp_model.IntVar, int]] = []
         for day in data.days:
             max_p = data.max_period_per_day.get(day, 0)
-            for p in range(1, max_p + 1):
+            for p in range(0, max_p + 1):
                 var = variables.x.get(
                     (req.class_group_id, req.subject_id, req.teacher_id, day, p)
                 )
@@ -737,7 +737,7 @@ def _apply_morning_priority(
         period_penalty_terms: list[tuple[cp_model.IntVar, int]] = []
         for day in data.days:
             max_p = data.max_period_per_day.get(day, 0)
-            for p in range(1, max_p + 1):
+            for p in range(0, max_p + 1):
                 var = variables.x_track.get((rep_track.id, day, p))
                 if var is not None:
                     period_penalty_terms.append((var, p - 1))

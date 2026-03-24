@@ -1412,111 +1412,6 @@ def _compile_sync_teacher_classes(
         _add_soft_penalty(model, variables, constraint, penalty)
 
 
-# ---------------------------------------------------------------------------
-# GRADE RULES
-# ---------------------------------------------------------------------------
-
-def _compile_grade_activity_hours(
-    model: cp_model.CpModel, data: SolverData,
-    variables: SolverVariables, constraint,
-) -> None:
-    """HARD: Block timeslots beyond the max period for each day per grade.
-
-    Parameters:
-      periods_per_day_map: {"SUNDAY": 8, "FRIDAY": 4, ...}
-      allow_grouped_beyond: int | null  — if set, grouped tracks (הקבצות)
-          may extend up to this period even when the class limit is lower.
-          Example: allow_grouped_beyond=9 lets מגמות use period 9.
-    target_type=GRADE, target_id=grade_id
-    """
-    periods_map = constraint.parameters.get("periods_per_day_map", {})
-    grade_id = constraint.target_id
-    allow_grouped_beyond = constraint.parameters.get("allow_grouped_beyond")
-    if not periods_map or not grade_id:
-        return
-
-    # Find all classes in this grade
-    grade_classes = [cg for cg in data.class_groups if cg.grade_id == grade_id]
-    if not grade_classes:
-        return
-
-    # Build set of track variable names to skip when allow_grouped_beyond is set
-    track_var_names: set[str] = set()
-    if allow_grouped_beyond:
-        for cluster in data.clusters:
-            for track in cluster.tracks:
-                if track.teacher_id is None:
-                    continue
-                for tk, var in variables.x_track.items():
-                    tr_id, d, p = tk
-                    if tr_id == track.id:
-                        track_var_names.add(var.name)
-
-    for cg in grade_classes:
-        slot_vars = _vars_for_class(variables, data, cg.id)
-        for (day, period), vlist in slot_vars.items():
-            max_period = periods_map.get(day)
-            if max_period is not None and period > max_period:
-                for var in vlist:
-                    # If allow_grouped_beyond is set and this is a track var
-                    # within the extended range, skip blocking it
-                    if (allow_grouped_beyond
-                            and period <= allow_grouped_beyond
-                            and var.name in track_var_names):
-                        continue
-                    model.add(var == 0)
-
-
-def _compile_short_days_flexible(
-    model: cp_model.CpModel, data: SolverData,
-    variables: SolverVariables, constraint,
-) -> None:
-    """HARD: At least N days per week must be 'short' (no lessons after max_period_short).
-
-    Parameters: {"num_short_days": 2, "max_period_short": 5}
-    target_type=GRADE, target_id=grade_id
-    The solver chooses which days are short.
-    """
-    num_short = constraint.parameters.get("num_short_days", 2)
-    max_p_short = constraint.parameters.get("max_period_short", 5)
-    grade_id = constraint.target_id
-    if not grade_id:
-        return
-
-    grade_classes = [cg for cg in data.class_groups if cg.grade_id == grade_id]
-    if not grade_classes:
-        return
-
-    for cg in grade_classes:
-        slot_vars = _vars_for_class(variables, data, cg.id)
-        is_short: list[cp_model.IntVar] = []
-
-        for day in data.days:
-            # Collect vars for periods > max_p_short on this day
-            late_vars: list[cp_model.IntVar] = []
-            for (d, p), vlist in slot_vars.items():
-                if d == day and p > max_p_short:
-                    late_vars.extend(vlist)
-
-            if not late_vars:
-                # Day is always short (no late slots available) — counts as short
-                is_short_day = model.new_bool_var(
-                    f"short_{constraint.id}_c{cg.id}_{day}"
-                )
-                model.add(is_short_day == 1)
-                is_short.append(is_short_day)
-                continue
-
-            # is_short_day = 1 if NO lessons after max_p_short
-            is_short_day = model.new_bool_var(
-                f"short_{constraint.id}_c{cg.id}_{day}"
-            )
-            model.add(sum(late_vars) == 0).only_enforce_if(is_short_day)
-            model.add(sum(late_vars) >= 1).only_enforce_if(is_short_day.negated())
-            is_short.append(is_short_day)
-
-        if is_short:
-            model.add(sum(is_short) >= num_short)
 
 
 # ---------------------------------------------------------------------------
@@ -1555,7 +1450,7 @@ def _compile_grouping_extra_at_end(
         for day in data.days:
             max_p = data.max_period_per_day.get(day, 8)
 
-            for period in range(1, max_p + 1):
+            for period in range(0, max_p + 1):
                 k_ref = (ref_track.id, day, period)
                 if k_ref not in variables.x_track:
                     continue
@@ -1809,25 +1704,10 @@ def _compile_class_end_time(
         targets = [cg.id for cg in data.class_groups]
 
     for cg_id in targets:
-        # Skip classes whose grade limits (GRADE_ACTIVITY_HOURS) don't allow
-        # the required end periods — forcing a lesson at period 7/8 when the
-        # grade is capped at period 6 would create a contradiction.
-        cg_obj = next((cg for cg in data.class_groups if cg.id == cg_id), None)
-        grade_map = data.grade_periods_map.get(cg_obj.grade_id) if cg_obj else None
-
         slot_vars = _vars_for_class(variables, data, cg_id)
         for day in data.days:
             if str(day) not in target_days and day not in target_days:
                 continue
-
-            # Check if grade activity hours allow the required periods on this day
-            if grade_map:
-                grade_max_for_day = grade_map.get(str(day), grade_map.get(day))
-                if grade_max_for_day is not None:
-                    # If the grade's max period is below ALL allowed end periods,
-                    # this class cannot satisfy the constraint — skip it.
-                    if all(p > grade_max_for_day for p in allowed_periods):
-                        continue
 
             # 1) No lessons after max allowed period
             late_vars: list[cp_model.IntVar] = []
@@ -2114,8 +1994,6 @@ _COMPILERS = {
     RuleType.MINIMIZE_TEACHER_DAYS: _compile_minimize_teacher_days,
     RuleType.CLASS_DAY_LENGTH_LIMIT: _compile_class_day_length_limit,
     RuleType.TEACHER_FIRST_LAST_PREFERENCE: _compile_teacher_first_last_preference,
-    RuleType.GRADE_ACTIVITY_HOURS: _compile_grade_activity_hours,
-    RuleType.SHORT_DAYS_FLEXIBLE: _compile_short_days_flexible,
     RuleType.GROUPING_EXTRA_AT_END: _compile_grouping_extra_at_end,
     RuleType.COMPACT_SCHOOL_DAY: _compile_compact_school_day,
     RuleType.HOMEROOM_EARLY: _compile_homeroom_early,

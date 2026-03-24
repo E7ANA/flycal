@@ -82,27 +82,6 @@ TEMPLATES: list[dict] = [
         "default_weight": 50,
         "default_params": {"max_periods": 5, "day": "FRIDAY"},
     },
-    {
-        "name": "שכבה - שעות פעילות",
-        "rule_type": RuleType.GRADE_ACTIVITY_HOURS,
-        "category": ConstraintCategory.GLOBAL,
-        "default_type": ConstraintType.HARD,
-        "default_weight": 50,
-        "default_params": {
-            "periods_per_day_map": {
-                "SUNDAY": 8, "MONDAY": 8, "TUESDAY": 8,
-                "WEDNESDAY": 8, "THURSDAY": 8, "FRIDAY": 5,
-            }
-        },
-    },
-    {
-        "name": "שכבה - ימים קצרים גמישים",
-        "rule_type": RuleType.SHORT_DAYS_FLEXIBLE,
-        "category": ConstraintCategory.GLOBAL,
-        "default_type": ConstraintType.HARD,
-        "default_weight": 50,
-        "default_params": {"num_short_days": 2, "max_period_short": 5},
-    },
 ]
 
 
@@ -130,8 +109,6 @@ _RULE_REQUIRED_PARAMS: dict[RuleType, list[str]] = {
     RuleType.SYNC_TRACKS: ["cluster_id"],
     RuleType.CLASS_DAY_LENGTH_LIMIT: ["max_periods"],
     RuleType.TEACHER_FIRST_LAST_PREFERENCE: ["prefer"],
-    RuleType.GRADE_ACTIVITY_HOURS: ["periods_per_day_map"],
-    RuleType.SHORT_DAYS_FLEXIBLE: ["num_short_days", "max_period_short"],
     RuleType.COMPACT_SCHOOL_DAY: ["min_periods"],
 }
 
@@ -157,8 +134,6 @@ _SOFT_ONLY_RULES: set[RuleType] = {
 # Rules that are ALWAYS HARD
 _ALWAYS_HARD_RULES: set[RuleType] = {
     RuleType.SYNC_TRACKS,
-    RuleType.GRADE_ACTIVITY_HOURS,
-    RuleType.SHORT_DAYS_FLEXIBLE,
 }
 
 

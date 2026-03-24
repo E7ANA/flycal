@@ -217,8 +217,8 @@ def _build_class_sheet(
     for lesson in lessons:
         grid.setdefault((lesson.day, lesson.period), []).append(lesson)
 
-    for period in range(1, max_period + 1):
-        row = period + 1
+    for period in range(0, max_period + 1):
+        row = period + 2
         _styled_cell(ws, row, 1, period, font=PERIOD_FONT)
 
         for col_idx, day in enumerate(days, start=2):
@@ -288,8 +288,8 @@ def _build_teacher_sheet(
         for sm, meeting in teacher_meetings:
             meeting_grid[(sm.day, sm.period)] = meeting.name
 
-    for period in range(1, max_period + 1):
-        row = period + 1
+    for period in range(0, max_period + 1):
+        row = period + 2
         _styled_cell(ws, row, 1, period, font=PERIOD_FONT)
 
         for col_idx, day in enumerate(days, start=2):
@@ -373,7 +373,7 @@ def _build_meetings_sheet(
         name = meeting.name if meeting else f"#{sm.meeting_id}"
         mtg_grid.setdefault((sm.day, sm.period), []).append(name)
 
-    for period in range(1, max_period + 1):
+    for period in range(0, max_period + 1):
         row = period + 2
         _styled_cell(ws, row, 1, period, font=PERIOD_FONT)
         for col_idx, day in enumerate(days, start=2):
