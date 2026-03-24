@@ -1,19 +1,61 @@
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Save } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import { fetchTimeSlots, generateTimeSlots, batchUpdateTimeSlots } from "@/api/timeslots";
+import { fetchSchool, updateSchool } from "@/api/schools";
 import { Button } from "@/components/common/Button";
-import { DAY_LABELS, DAYS_ORDER } from "@/lib/constraints";
+import { DAY_LABELS, DAY_LABELS_SHORT, DAYS_ORDER } from "@/lib/constraints";
+
+const ALL_DAYS = [...DAYS_ORDER];
+const MAX_PERIOD = 10;
+const MIN_PERIOD = 0;
 
 export default function TimeSlotsPage() {
   const schoolId = useSchoolStore((s) => s.activeSchoolId);
   const qc = useQueryClient();
 
+  const { data: school } = useQuery({
+    queryKey: ["school", schoolId],
+    queryFn: () => fetchSchool(schoolId!),
+    enabled: !!schoolId,
+  });
+
   const { data: slots = [] } = useQuery({
     queryKey: ["timeslots", schoolId],
     queryFn: () => fetchTimeSlots(schoolId!),
     enabled: !!schoolId,
+  });
+
+  // Local state for periods_per_day_map editing
+  const [periodsMap, setPeriodsMap] = useState<Record<string, number>>({});
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (!school) return;
+    const map: Record<string, number> = {};
+    for (const day of ALL_DAYS) {
+      map[day] = school.periods_per_day_map?.[day] ?? school.periods_per_day;
+    }
+    setPeriodsMap(map);
+    setDirty(false);
+  }, [school]);
+
+  const updateSchoolMut = useMutation({
+    mutationFn: async () => {
+      if (!schoolId) return;
+      await updateSchool(schoolId, { periods_per_day_map: periodsMap });
+      // Regenerate timeslots with new settings
+      await generateTimeSlots(schoolId);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["school", schoolId] });
+      qc.invalidateQueries({ queryKey: ["timeslots", schoolId] });
+      setDirty(false);
+      toast.success("שעות פעילות עודכנו ומשבצות נוצרו מחדש");
+    },
+    onError: () => toast.error("שגיאה בעדכון שעות פעילות"),
   });
 
   const generateMut = useMutation({
@@ -45,7 +87,17 @@ export default function TimeSlotsPage() {
     return (
       <div className="space-y-6">
         <h2 className="text-2xl font-bold">שעות פעילות</h2>
-        <div className="flex flex-col items-center gap-4 py-12">
+
+        {/* Show period config even when no slots exist */}
+        <PeriodConfigPanel
+          periodsMap={periodsMap}
+          setPeriodsMap={(m) => { setPeriodsMap(m); setDirty(true); }}
+          dirty={dirty}
+          saving={updateSchoolMut.isPending}
+          onSave={() => updateSchoolMut.mutate()}
+        />
+
+        <div className="flex flex-col items-center gap-4 py-8">
           <p className="text-muted-foreground">
             לא הוגדרו משבצות זמן עדיין. צור משבצות לפי הגדרות בית הספר.
           </p>
@@ -103,7 +155,7 @@ export default function TimeSlotsPage() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold">שעות פעילות</h2>
@@ -111,17 +163,18 @@ export default function TimeSlotsPage() {
             הגדר שעות פעילות ברמת בית הספר
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => generateMut.mutate()}
-          disabled={generateMut.isPending}
-        >
-          <RefreshCw className="h-4 w-4" />
-          איפוס משבצות
-        </Button>
       </div>
 
+      {/* Period config panel */}
+      <PeriodConfigPanel
+        periodsMap={periodsMap}
+        setPeriodsMap={(m) => { setPeriodsMap(m); setDirty(true); }}
+        dirty={dirty}
+        saving={updateSchoolMut.isPending}
+        onSave={() => updateSchoolMut.mutate()}
+      />
+
+      {/* Timeslot grid */}
       <SchoolTimeSlotsPanel
         activeDays={activeDays}
         periods={periods}
@@ -131,6 +184,60 @@ export default function TimeSlotsPage() {
         toggleDay={toggleDay}
         togglePeriod={togglePeriod}
       />
+    </div>
+  );
+}
+
+// ─── Period config per day ───────────────────────────────
+function PeriodConfigPanel({
+  periodsMap,
+  setPeriodsMap,
+  dirty,
+  saving,
+  onSave,
+}: {
+  periodsMap: Record<string, number>;
+  setPeriodsMap: (m: Record<string, number>) => void;
+  dirty: boolean;
+  saving: boolean;
+  onSave: () => void;
+}) {
+  const setPeriodForDay = (day: string, value: number) => {
+    const clamped = Math.max(MIN_PERIOD, Math.min(MAX_PERIOD, value));
+    setPeriodsMap({ ...periodsMap, [day]: clamped });
+  };
+
+  return (
+    <div className="rounded-lg border bg-card p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-base font-semibold">שעות פעילות מקסימליות ליום</h3>
+        {dirty && (
+          <Button size="sm" onClick={onSave} disabled={saving}>
+            <Save className="h-4 w-4" />
+            {saving ? "שומר..." : "שמור וייצר מחדש"}
+          </Button>
+        )}
+      </div>
+      <p className="text-sm text-muted-foreground">
+        שעה אחרונה אפשרית בכל יום (0 = שעת אפס, מקסימום 10). שינוי ייצור מחדש את כל המשבצות.
+      </p>
+      <div className="flex flex-wrap gap-4">
+        {ALL_DAYS.map((day) => (
+          <div key={day} className="flex flex-col items-center gap-1">
+            <label className="text-sm font-medium text-muted-foreground">
+              {DAY_LABELS_SHORT[day] ?? day}
+            </label>
+            <input
+              type="number"
+              min={MIN_PERIOD}
+              max={MAX_PERIOD}
+              value={periodsMap[day] ?? 8}
+              onChange={(e) => setPeriodForDay(day, parseInt(e.target.value) || 0)}
+              className="w-16 rounded-md border border-border bg-background px-2 py-1.5 text-center text-sm"
+            />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -155,7 +262,7 @@ function SchoolTimeSlotsPanel({
 }) {
   return (
     <div className="space-y-4">
-      <h3 className="text-lg font-semibold">שעות פעילות — בית ספרי</h3>
+      <h3 className="text-lg font-semibold">גריד משבצות</h3>
       <p className="text-sm text-muted-foreground">
         לחץ על תא כדי להפעיל/לכבות משבצת. לחץ על כותרת יום או שעה כדי להפעיל/לכבות שורה/עמודה שלמה.
       </p>
@@ -255,4 +362,3 @@ function SchoolTimeSlotsPanel({
     </div>
   );
 }
-
