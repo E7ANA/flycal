@@ -1670,25 +1670,37 @@ def _compile_class_end_time(
     """CLASS_END_TIME: on specified days, the last lesson for each class must
     end at one of the allowed periods.
 
-    Parameters:
-        days: list[str] — which days (e.g. ["MONDAY", "WEDNESDAY"])
-        allowed_periods: list[int] — specific periods where the day can end (e.g. [6, 8])
-        (legacy) min_period/max_period — converted to allowed_periods range
+    Parameters (3 formats, checked in order):
+        1. per_day_periods: dict[str, list[int]] — per-day allowed end periods
+           e.g. {"SUNDAY": [6,7,8], "WEDNESDAY": [6]}
+        2. days + allowed_periods — same periods for all selected days
+        3. days + min_period/max_period — legacy range format
     """
-    target_days = constraint.parameters.get("days", [])
-    if not target_days:
+    # ── Resolve per-day allowed periods map ──
+    per_day_periods: dict[str, list[int]] = {}
+
+    pdp = constraint.parameters.get("per_day_periods")
+    if pdp and isinstance(pdp, dict):
+        # Format 1: per-day map
+        per_day_periods = {d: sorted(ps) for d, ps in pdp.items() if ps}
+    else:
+        # Format 2 or 3: uniform periods for selected days
+        target_days = constraint.parameters.get("days", [])
+        if not target_days:
+            return
+        allowed_periods = constraint.parameters.get("allowed_periods")
+        if not allowed_periods:
+            min_period = constraint.parameters.get("min_period")
+            max_period = constraint.parameters.get("max_period")
+            if min_period is None or max_period is None:
+                return
+            allowed_periods = list(range(min_period, max_period + 1))
+        for d in target_days:
+            per_day_periods[d] = sorted(allowed_periods)
+
+    if not per_day_periods:
         return
 
-    # Support both new format (allowed_periods) and legacy (min_period/max_period)
-    allowed_periods = constraint.parameters.get("allowed_periods")
-    if not allowed_periods:
-        min_period = constraint.parameters.get("min_period")
-        max_period = constraint.parameters.get("max_period")
-        if min_period is None or max_period is None:
-            return
-        allowed_periods = list(range(min_period, max_period + 1))
-
-    max_period = max(allowed_periods)
     is_hard = constraint.type == ConstraintType.HARD
 
     # Determine target classes
@@ -1696,7 +1708,6 @@ def _compile_class_end_time(
     if constraint.category == "CLASS" and constraint.target_id:
         targets = [constraint.target_id]
     elif constraint.category == "GRADE" and constraint.target_id:
-        # Apply to all classes in the targeted grade
         targets = [cg.id for cg in data.class_groups if cg.grade_id == constraint.target_id]
     elif target_class_ids:
         targets = [cid for cid in target_class_ids if any(cg.id == cid for cg in data.class_groups)]
@@ -1706,8 +1717,10 @@ def _compile_class_end_time(
     for cg_id in targets:
         slot_vars = _vars_for_class(variables, data, cg_id)
         for day in data.days:
-            if str(day) not in target_days and day not in target_days:
+            allowed_periods = per_day_periods.get(str(day)) or per_day_periods.get(day)
+            if not allowed_periods:
                 continue
+            max_period = max(allowed_periods)
 
             # 1) No lessons after max allowed period
             late_vars: list[cp_model.IntVar] = []
