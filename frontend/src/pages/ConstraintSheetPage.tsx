@@ -15,27 +15,9 @@ import { DataTable } from "@/components/common/DataTable";
 import { Badge } from "@/components/common/Badge";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { Button } from "@/components/common/Button";
-import { RULE_TYPE_LABELS, CATEGORY_LABELS, DAY_LABELS } from "@/lib/constraints";
+import { RULE_TYPE_LABELS, CATEGORY_LABELS, formatParams } from "@/lib/constraints";
 import type { Constraint, ConstraintCategory, RuleType } from "@/types/models";
 
-function formatParams(c: Constraint): string {
-  const p = c.parameters;
-  const parts: string[] = [];
-  if (p.day && p.day !== "ALL")
-    parts.push(DAY_LABELS[p.day as string] ?? String(p.day));
-  if (p.day === "ALL") parts.push("כל הימים");
-  if (p.period) parts.push(`שעה ${p.period}`);
-  if (p.from_period && p.to_period)
-    parts.push(`שעות ${p.from_period}–${p.to_period}`);
-  if (p.max) parts.push(`מקס׳ ${p.max}`);
-  if (p.min) parts.push(`מינ׳ ${p.min}`);
-  if (p.max_days) parts.push(`${p.max_days} ימים`);
-  if (p.min_days) parts.push(`${p.min_days} ימים`);
-  if (p.max_periods) parts.push(`${p.max_periods} שעות`);
-  if (p.consecutive_count) parts.push(`${p.consecutive_count} רצופות`);
-  if (p.max_difference) parts.push(`הפרש ${p.max_difference}`);
-  return parts.join(" | ") || "—";
-}
 
 const CATEGORY_OPTIONS: { value: ConstraintCategory | ""; label: string }[] = [
   { value: "", label: "כל הקטגוריות" },

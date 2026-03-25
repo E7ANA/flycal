@@ -1170,71 +1170,8 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
                 conflicts.append(entry)
 
     # ── Check 2: pinned-slot collisions (req vs track, req vs req, etc.) ──
-    # Build teacher -> [(day, period, item_type, item_id, source_label)]
-    teacher_pinned: dict[int, list[tuple[str, int, str, int, str]]] = {}
-
-    for r in data.requirements:
-        if r.is_grouped or r.teacher_id is None:
-            continue
-        pinned = getattr(r, "pinned_slots", None)
-        if not pinned:
-            continue
-        subj_name = r.subject.name if r.subject else f"מקצוע {r.subject_id}"
-        cg_name = next((cg.name for cg in data.class_groups if cg.id == r.class_group_id), "")
-        label = f"{subj_name} ל{cg_name} ({r.hours_per_week}ש)"
-        for slot in pinned:
-            day, period = slot.get("day"), slot.get("period")
-            if day and period:
-                teacher_pinned.setdefault(r.teacher_id, []).append(
-                    (day, period, "requirement", r.id, label)
-                )
-
-    # Collect pinned tracks (synced clusters inherit pins)
-    # Deduplicate: collect UNIQUE slots per cluster
-    cluster_pinned_slots: dict[int, set[tuple[str, int]]] = {}
-    for cluster in data.clusters:
-        slots_set: set[tuple[str, int]] = set()
-        for track in cluster.tracks:
-            pinned = getattr(track, "pinned_slots", None)
-            if pinned:
-                for slot in pinned:
-                    day, period = slot.get("day"), slot.get("period")
-                    if day and period:
-                        slots_set.add((day, period))
-        if slots_set:
-            cluster_pinned_slots[cluster.id] = slots_set
-
-    # For each cluster, register each teacher ONCE per slot
-    for cluster in data.clusters:
-        inherited = cluster_pinned_slots.get(cluster.id, set())
-        if not inherited:
-            continue
-        # Track which teacher+slot combos we've already added
-        seen: set[tuple[int, str, int]] = set()
-        for track in cluster.tracks:
-            if track.teacher_id is None:
-                continue
-            label = f"רצועה '{track.name}' ({cluster.name}, {track.hours_per_week}ש)"
-            for day, period in inherited:
-                key = (track.teacher_id, day, period)
-                if key in seen:
-                    continue
-                seen.add(key)
-                teacher_pinned.setdefault(track.teacher_id, []).append(
-                    (day, period, "track", track.id, label)
-                )
-
-    for meeting in data.meetings:
-        pinned = getattr(meeting, "pinned_slots", None)
-        if not pinned:
-            continue
-        for slot in pinned:
-            day, period = slot.get("day"), slot.get("period")
-            if day and period:
-                for t in meeting.teachers:
-                    teacher_pinned.setdefault(t.id, []).append(
-                        (day, period, "meeting", meeting.id, f"ישיבה '{meeting.name}'")
-                    )
+    from app.solver.pinned_validator import build_teacher_pinned_map
+    teacher_pinned = build_teacher_pinned_map(data, engine_meeting_filter=False)
 
     # Find collisions: same teacher, same (day, period), different items
     # Separate into unresolved conflicts vs approved overlaps
@@ -1298,7 +1235,7 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
                         for j in range(i + 1, len(slot_entries))
                     )
                     if any_disallowed:
-                        from app.solver.engine import _day_he
+                        from app.solver.pinned_validator import day_he as _day_he
                         sources = " + ".join(lbl for _, _, lbl in slot_entries)
                         collision_descs.append(f"{_day_he(day)} שעה {period}: {sources}")
 
@@ -1362,7 +1299,7 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
                         for j in range(i + 1, len(slot_entries))
                     )
                     if all_allowed:
-                        from app.solver.engine import _day_he
+                        from app.solver.pinned_validator import day_he as _day_he
                         sources = " + ".join(lbl for _, _, lbl in slot_entries)
                         approved_descs.append(f"{_day_he(day)} שעה {period}: {sources}")
 
@@ -1501,7 +1438,7 @@ def detect_teacher_overlaps(req: SolveRequest, db: Session = Depends(get_db)):
                 continue  # Teacher teaches on at least one meeting day
 
             # Conflict: teacher's teaching days don't include any meeting day
-            from app.solver.engine import _day_he
+            from app.solver.pinned_validator import day_he as _day_he
             meeting_days_he = ", ".join(_day_he(d) for d in sorted(meeting_days))
             teach_days_he = ", ".join(_day_he(d) for d in sorted(teacher_forced_days))
 

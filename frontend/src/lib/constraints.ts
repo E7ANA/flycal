@@ -1,4 +1,4 @@
-import type { RuleType, ConstraintCategory } from "@/types/models";
+import type { RuleType, ConstraintCategory, Constraint } from "@/types/models";
 
 export const CATEGORY_LABELS: Record<ConstraintCategory, string> = {
   TEACHER: "מורה",
@@ -69,3 +69,26 @@ export const DAYS_ORDER = [
   "THURSDAY",
   "FRIDAY",
 ] as const;
+
+/** Format constraint parameters as a human-readable Hebrew string. */
+export function formatParams(c: Constraint): string {
+  const p = c.parameters;
+  const parts: string[] = [];
+  if (p.day && p.day !== "ALL")
+    parts.push(DAY_LABELS[p.day as string] ?? String(p.day));
+  if (p.day === "ALL") parts.push("כל הימים");
+  if (p.period) parts.push(`שעה ${p.period}`);
+  if (p.from_period && p.to_period)
+    parts.push(`שעות ${p.from_period}\u2013${p.to_period}`);
+  if (p.max) parts.push(`מקס\u05F3 ${p.max}`);
+  if (p.min) parts.push(`מינ\u05F3 ${p.min}`);
+  if (p.max_days) parts.push(`${p.max_days} ימים`);
+  if (p.min_days) parts.push(`${p.min_days} ימים`);
+  if (p.max_periods) parts.push(`${p.max_periods} שעות`);
+  if (p.consecutive_count) parts.push(`${p.consecutive_count} רצופות`);
+  if (p.max_difference) parts.push(`הפרש ${p.max_difference}`);
+  if (p.min_period && p.max_period) parts.push(`סיום שעות ${p.min_period}\u2013${p.max_period}`);
+  if (p.days && Array.isArray(p.days) && (p.days as string[]).length > 0)
+    parts.push((p.days as string[]).map((d: string) => DAY_LABELS[d] ?? d).join(", "));
+  return parts.join(" | ") || "\u2014";
+}

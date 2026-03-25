@@ -780,7 +780,16 @@ def _apply_flexible_meeting_attendance(
     skips them in teacher no-overlap. This brain rule adds a SOFT penalty
     for each teacher who has a lesson/track at the same time as the meeting,
     encouraging (but not requiring) their attendance.
+
+    NOTE: For PLENARY meetings, preferred (non-locked) teachers are handled
+    separately by _apply_plenary_preferred_no_overlap (higher weight=85).
+    This rule only handles:
+    - Non-plenary flexible meetings (all teachers)
+    - Plenary flexible meetings: locked teachers only (preferred are skipped
+      to avoid double-penalizing the same overlap).
     """
+    from app.models.meeting import MeetingType
+
     brain_id = _next_brain_id() - 1
 
     for meeting in data.meetings:
@@ -789,7 +798,19 @@ def _apply_flexible_meeting_attendance(
         if not meeting.teachers:
             continue
 
+        # For PLENARY meetings, skip preferred (non-locked) teachers —
+        # they are handled by _apply_plenary_preferred_no_overlap with
+        # higher weight (85 vs 50), so penalizing here would double-count.
+        is_plenary = meeting.meeting_type == MeetingType.PLENARY.value
+        locked_ids = set(getattr(meeting, "locked_teacher_ids", None) or [])
+
         teacher_ids = {t.id for t in meeting.teachers}
+        if is_plenary:
+            # Only keep locked teachers — preferred ones are handled elsewhere
+            teacher_ids = teacher_ids & locked_ids
+            if not teacher_ids:
+                continue
+
         has_any_penalty = False
 
         for teacher_id in teacher_ids:
