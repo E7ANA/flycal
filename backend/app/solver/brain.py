@@ -1114,10 +1114,13 @@ def _apply_homeroom_daily_meeting(
             if c_id == class_id and t_id == teacher_id and s_id not in kinoos_subject_ids:
                 relevant_keys.setdefault(day, []).append(var)
 
-        # Also check tracks that serve this class
+        # Also check tracks that serve this class (excluding כינוס tracks)
         for cluster in data.clusters:
             for track in cluster.tracks:
                 if track.teacher_id != teacher_id:
+                    continue
+                # Skip כינוס tracks — they don't count as meeting the class
+                if track.name and "כינוס" in track.name:
                     continue
                 serves_class = False
                 if track.source_class_id == class_id:
@@ -2081,8 +2084,9 @@ def _apply_transport_early_finish(
                 has_any = True
 
     if has_any:
+        max_weight = max(data.transport_priorities.values()) if data.transport_priorities else 0
         variables.brain_info[brain_id] = {
             "name": "עדיפות יום מוקדם למורים",
-            "weight": 0,  # Per-teacher weight used directly
+            "weight": max_weight,
         }
         _update_brain_id(brain_id)

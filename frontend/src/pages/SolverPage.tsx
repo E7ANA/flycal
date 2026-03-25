@@ -140,10 +140,10 @@ export default function SolverPage() {
     }
   }, [schoolId, stopPolling]);
 
-  const startPolling = useCallback((jobId: string) => {
+  const startPolling = useCallback((jobId: string, resumeStartTime?: number) => {
     stopPolling();
     setIsSolving(true);
-    solveStartRef.current = Date.now();
+    solveStartRef.current = resumeStartTime ?? Date.now();
     timerRef.current = setInterval(() => {
       setElapsedTimer(Math.round((Date.now() - solveStartRef.current) / 1000));
     }, 1000);
@@ -157,10 +157,15 @@ export default function SolverPage() {
         }
       } catch {
         // Job not found — may have finished and been cleaned up
+        // Only reset if we haven't already received a result
         stopPolling();
-        setIsSolving(false);
-        setActiveJobId(null);
-        localStorage.removeItem("solve_job_id");
+        setSolveResult((prev) => {
+          if (prev) return prev;          // result already received — keep it
+          setIsSolving(false);
+          setActiveJobId(null);
+          localStorage.removeItem("solve_job_id");
+          return null;
+        });
       }
     }, 800);
   }, [stopPolling, handleSolveResult]);
@@ -174,10 +179,10 @@ export default function SolverPage() {
           handleSolveResult(prog.result);
         } else {
           // Set the start time based on server elapsed so the timer continues correctly
-          solveStartRef.current = Date.now() - prog.elapsed * 1000;
+          const resumeStart = Date.now() - prog.elapsed * 1000;
           setElapsedTimer(Math.round(prog.elapsed));
           setProgress(prog);
-          startPolling(activeJobId);
+          startPolling(activeJobId, resumeStart);
         }
       }).catch(() => {
         // Job gone

@@ -56,6 +56,7 @@ class SolveResponse(BaseModel):
     status: str
     message: str
     solve_time: float
+    first_solution_time: float | None = None
     solutions: list[SolutionRead]
     diagnosis: list[DiagnosisItem] | None = None
 
@@ -132,6 +133,7 @@ def _solve_in_thread(
             status=result.status.value,
             message=result.message,
             solve_time=round(result.solve_time, 2),
+            first_solution_time=result.first_solution_time,
             solutions=[SolutionRead.model_validate(s) for s in result.solutions],
             diagnosis=diag_items,
         )
@@ -272,7 +274,7 @@ async def get_solve_progress(job_id: str):
     if progress is None:
         # Check if result exists (job finished and progress was cleared)
         with _solve_results_lock:
-            result = _solve_results.get(job_id)
+            result = _solve_results.pop(job_id, None)
         if result:
             return {
                 "step": "done",
@@ -301,10 +303,11 @@ async def get_solve_progress(job_id: str):
 
     if progress.done:
         with _solve_results_lock:
-            result = _solve_results.pop(job_id, None)
-        _clear_progress(job_id)
+            result = _solve_results.get(job_id)
         if result:
             data["result"] = result.model_dump()
+            # Keep result available for a few more polls, then clean up
+            _clear_progress(job_id)
 
     return data
 
