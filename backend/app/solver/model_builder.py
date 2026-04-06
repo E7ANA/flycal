@@ -39,6 +39,8 @@ class SolverData:
     teacher_rubrica_map: dict[int, float] = field(default_factory=dict)
     # teacher_id -> manual override for max work days
     teacher_max_work_days: dict[int, int] = field(default_factory=dict)
+    # teacher_id -> manual override for min work days
+    teacher_min_work_days: dict[int, int] = field(default_factory=dict)
     # teacher_ids exempt from "must teach on meeting day" (management + counselors)
     meeting_day_exempt_ids: set[int] = field(default_factory=set)
     # teacher_ids that are management team (is_management/principal/director/ped.coord)
@@ -168,6 +170,7 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
     homeroom_map: dict[int, int] = {}
     teacher_rubrica_map: dict[int, float] = {}
     teacher_max_work_days: dict[int, int] = {}
+    teacher_min_work_days: dict[int, int] = {}
     meeting_day_exempt_ids: set[int] = set()
     management_teacher_ids: set[int] = set()
     transport_priorities: dict[int, int] = {}
@@ -189,6 +192,8 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
                 teacher_rubrica_map[t.id] = t.rubrica_hours
             if t.max_work_days is not None:
                 teacher_max_work_days[t.id] = t.max_work_days
+            if t.min_work_days is not None:
+                teacher_min_work_days[t.id] = t.min_work_days
             # Management and counselors exempt from meeting-day teaching rule
             is_mgmt = (
                 getattr(t, "is_management", False)
@@ -249,6 +254,7 @@ def load_solver_data(db: Session, school_id: int) -> SolverData:
         homeroom_map=homeroom_map,
         teacher_rubrica_map=teacher_rubrica_map,
         teacher_max_work_days=teacher_max_work_days,
+        teacher_min_work_days=teacher_min_work_days,
         meeting_day_exempt_ids=meeting_day_exempt_ids,
         management_teacher_ids=management_teacher_ids,
         transport_priorities=transport_priorities,

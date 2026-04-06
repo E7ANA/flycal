@@ -1705,10 +1705,10 @@ def _compile_class_end_time(
 
     # Determine target classes
     target_class_ids = constraint.parameters.get("target_class_ids", [])
-    if constraint.category == "CLASS" and constraint.target_id:
-        targets = [constraint.target_id]
-    elif constraint.category == "GRADE" and constraint.target_id:
+    if constraint.target_type == "GRADE" and constraint.target_id:
         targets = [cg.id for cg in data.class_groups if cg.grade_id == constraint.target_id]
+    elif constraint.target_type == "CLASS" and constraint.target_id:
+        targets = [constraint.target_id]
     elif target_class_ids:
         targets = [cid for cid in target_class_ids if any(cg.id == cid for cg in data.class_groups)]
     else:

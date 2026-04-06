@@ -41,6 +41,7 @@ export interface Teacher {
   min_hours_per_week: number | null;
   rubrica_hours: number | null;
   max_work_days: number | null;
+  min_work_days: number | null;
   subject_ids: number[];
   is_coordinator: boolean;
   homeroom_class_id: number | null;

@@ -195,10 +195,11 @@ function GradeFormDialog({ open, onClose, grade, schoolId }: { open: boolean; on
 
 // ─── Class Form (with End-of-Day grid inside) ────────────
 function ClassFormDialog({
-  open, onClose, classGroup, grades, schoolId, eodConstraint,
+  open, onClose, classGroup, grades, schoolId, eodConstraint, gradeEodConstraint,
 }: {
   open: boolean; onClose: () => void; classGroup: ClassGroup | null; grades: Grade[]; schoolId: number;
   eodConstraint: Constraint | undefined;
+  gradeEodConstraint: Constraint | undefined;
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState(classGroup?.name ?? "");
@@ -270,8 +271,26 @@ function ClassFormDialog({
           <div className="flex items-center gap-2 mb-2">
             <Label className="text-sm font-semibold">אילוץ סוף יום</Label>
             {eodConstraint && <span className="text-xs text-muted-foreground">#{eodConstraint.id}</span>}
+            {!eodConstraint && gradeEodConstraint && (
+              <Badge variant="outline" className="text-[10px] border-dashed text-muted-foreground">שכבתי — לחץ לדרוס</Badge>
+            )}
           </div>
-          <EndOfDayGrid grid={eodGrid} onChange={setEodGrid} />
+          {!eodConstraint && gradeEodConstraint && Object.keys(eodGrid).length === 0 ? (
+            <div className="space-y-1">
+              <div className="opacity-50 pointer-events-none">
+                <EndOfDayGrid grid={constraintToGrid(gradeEodConstraint)} onChange={() => {}} />
+              </div>
+              <button
+                type="button"
+                className="text-xs text-primary hover:underline cursor-pointer"
+                onClick={() => setEodGrid(constraintToGrid(gradeEodConstraint))}
+              >
+                צור אילוץ פרטני לכיתה (העתק מהשכבה)
+              </button>
+            </div>
+          ) : (
+            <EndOfDayGrid grid={eodGrid} onChange={setEodGrid} />
+          )}
         </div>
 
         <DialogFooter>
@@ -378,9 +397,12 @@ export default function ClassesPage() {
                   {gradeClasses.map((c) => {
                     const s = classHoursSummary[c.id];
                     const eod = eodByClass[c.id];
+                    const eodGradeConstraint = eodByGrade[c.grade_id];
+                    const effectiveEod = eod ?? eodGradeConstraint;
+                    const isInherited = !eod && !!eodGradeConstraint;
                     // Summary of end-of-day: show unique periods across all days
-                    const eodSummary = eod ? (() => {
-                      const pdp = eod.parameters?.per_day_periods as Record<string, number[]> | undefined;
+                    const eodSummary = effectiveEod ? (() => {
+                      const pdp = effectiveEod.parameters?.per_day_periods as Record<string, number[]> | undefined;
                       if (pdp) {
                         const allP = new Set<number>();
                         Object.values(pdp).forEach((ps) => ps.forEach((p) => allP.add(p)));
@@ -403,7 +425,11 @@ export default function ClassesPage() {
                         </td>
                         <td className="p-2">
                           {eodSummary ? (
-                            <Badge variant="outline" className="text-xs">שעות {eodSummary}</Badge>
+                            isInherited ? (
+                              <Badge variant="outline" className="text-xs border-dashed text-muted-foreground" title="נקבע ברמת השכבה">שכבתי</Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-xs">שעות {eodSummary}</Badge>
+                            )
                           ) : (
                             <span className="text-muted-foreground text-xs">—</span>
                           )}
@@ -446,6 +472,7 @@ export default function ClassesPage() {
           open={classDialogOpen} onClose={() => setClassDialogOpen(false)}
           classGroup={editingClass} grades={grades} schoolId={schoolId}
           eodConstraint={editingClass ? eodByClass[editingClass.id] : undefined}
+          gradeEodConstraint={editingClass ? eodByGrade[editingClass.grade_id] : undefined}
         />
       )}
       {eodGrade && (

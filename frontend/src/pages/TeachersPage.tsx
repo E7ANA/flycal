@@ -176,6 +176,9 @@ function TeacherFormDialog({
   const [maxWorkDays, setMaxWorkDays] = useState<string>(
     teacher?.max_work_days != null ? String(teacher.max_work_days) : "",
   );
+  const [minWorkDays, setMinWorkDays] = useState<string>(
+    teacher?.min_work_days != null ? String(teacher.min_work_days) : "",
+  );
   const [selectedSubjectIds, setSelectedSubjectIds] = useState<number[]>(
     teacher?.subject_ids ?? [],
   );
@@ -239,6 +242,7 @@ function TeacherFormDialog({
         min_hours_per_week: minHours || null,
         rubrica_hours: rubricaHours !== "" ? Number(rubricaHours) : null,
         max_work_days: maxWorkDays !== "" ? Number(maxWorkDays) : null,
+        min_work_days: minWorkDays !== "" ? Number(minWorkDays) : null,
         subject_ids: selectedSubjectIds,
         is_coordinator: isCoordinator,
         homeroom_class_id: homeroomClassId,
@@ -266,6 +270,7 @@ function TeacherFormDialog({
         min_hours_per_week: minHours || null,
         rubrica_hours: rubricaHours !== "" ? Number(rubricaHours) : null,
         max_work_days: maxWorkDays !== "" ? Number(maxWorkDays) : null,
+        min_work_days: minWorkDays !== "" ? Number(minWorkDays) : null,
         subject_ids: selectedSubjectIds,
         is_coordinator: isCoordinator,
         homeroom_class_id: homeroomClassId,
@@ -361,7 +366,7 @@ function TeacherFormDialog({
             )}
           </div>
           <div>
-            <Label htmlFor="max-work-days">ימי עבודה (ידני)</Label>
+            <Label htmlFor="max-work-days">מקסימום ימי עבודה</Label>
             <Input
               id="max-work-days"
               type="number"
@@ -373,8 +378,25 @@ function TeacherFormDialog({
             />
             <p className="text-xs text-muted-foreground mt-1">
               {maxWorkDays !== ""
-                ? `→ ${maxWorkDays} ימי עבודה (גובר על חישוב אוטומטי)`
+                ? `→ עד ${maxWorkDays} ימים (גובר על חישוב אוטומטי)`
                 : "ריק = חישוב אוטומטי לפי שעות משרה"}
+            </p>
+          </div>
+          <div>
+            <Label htmlFor="min-work-days">מינימום ימי עבודה</Label>
+            <Input
+              id="min-work-days"
+              type="number"
+              min={1}
+              max={6}
+              value={minWorkDays}
+              onChange={(e) => setMinWorkDays(e.target.value)}
+              placeholder="ללא"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              {minWorkDays !== ""
+                ? `→ לפחות ${minWorkDays} ימים`
+                : "ריק = ללא מינימום"}
             </p>
           </div>
         </div>
@@ -672,25 +694,35 @@ export default function TeachersPage() {
           {
             header: "ימי עבודה",
             accessor: (t) => {
-              if (t.max_work_days != null) {
+              const min = t.min_work_days;
+              const max = t.max_work_days;
+              // Compute auto max from rubrica
+              const rubrica = t.rubrica_hours;
+              let autoMax: number | null = null;
+              if (rubrica != null && rubrica > 0) {
+                if (rubrica > 27) autoMax = 4;
+                else if (rubrica >= 20) autoMax = 3;
+                else autoMax = 2;
+              }
+              const effectiveMax = max ?? autoMax;
+              if (min != null && effectiveMax != null) {
                 return (
-                  <span className="font-medium" title="הוגדר ידנית">
-                    {t.max_work_days} ימים
+                  <span className={max != null ? "font-medium" : "text-muted-foreground"} title={max != null ? "מקסימום ידני" : "מקסימום לפי משרה"}>
+                    {min}–{effectiveMax}
                   </span>
                 );
               }
-              const rubrica = t.rubrica_hours;
-              let maxDays: number | null = null;
-              if (rubrica != null && rubrica > 0) {
-                if (rubrica > 27) maxDays = 4;
-                else if (rubrica >= 20) maxDays = 3;
-                else maxDays = 2;
+              if (min != null) {
+                return <span className="font-medium" title="מינימום ידני">{min}+</span>;
               }
-              return maxDays != null ? (
-                <span className="text-muted-foreground" title="לפי שעות משרה">
-                  {maxDays} ימים
-                </span>
-              ) : "—";
+              if (effectiveMax != null) {
+                return (
+                  <span className={max != null ? "font-medium" : "text-muted-foreground"} title={max != null ? "מקסימום ידני" : "לפי שעות משרה"}>
+                    עד {effectiveMax}
+                  </span>
+                );
+              }
+              return "—";
             },
             className: "w-24",
           },

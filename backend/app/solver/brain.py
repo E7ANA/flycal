@@ -1834,8 +1834,13 @@ def _apply_max_days_by_frontal(
             model.add(sum(day_vars) == 0).only_enforce_if(b.negated())
             day_active.append(b)
 
+        # Also enforce min_work_days if set
+        min_days = data.teacher_min_work_days.get(t_id)
+
         if day_active:
             model.add(sum(day_active) <= max_days)
+            if min_days is not None and min_days > 0:
+                model.add(sum(day_active) >= min_days)
 
         # Find teacher name
         teacher_name = f"מורה {t_id}"
@@ -1856,12 +1861,57 @@ def _apply_max_days_by_frontal(
             "frontal_hours": frontal,
             "rubrica_hours": rubrica,
             "max_days": max_days,
+            "min_days": min_days,
             "source": source,
+        })
+
+    # Handle teachers with min_work_days but no max_days rule above
+    handled_teachers = {b["teacher_id"] for b in breakdown}
+    for t_id, min_days in data.teacher_min_work_days.items():
+        if t_id in handled_teachers or min_days is None or min_days <= 0:
+            continue
+        frontal = teacher_frontal.get(t_id, 0)
+        if frontal <= 0:
+            continue
+
+        by_day = dict(teacher_day_vars.get(t_id, {}))
+        # Include meetings for min days
+        for day, mvars in teacher_meeting_day_vars.get(t_id, {}).items():
+            existing = list(by_day.get(day, []))
+            existing.extend(mvars)
+            by_day[day] = existing
+
+        day_active: list[cp_model.IntVar] = []
+        for day, day_vars in by_day.items():
+            if not day_vars:
+                continue
+            b = model.new_bool_var(f"brain_mindays_t{t_id}_{day}")
+            model.add(sum(day_vars) >= 1).only_enforce_if(b)
+            model.add(sum(day_vars) == 0).only_enforce_if(b.negated())
+            day_active.append(b)
+
+        if day_active:
+            model.add(sum(day_active) >= min_days)
+
+        teacher_name = f"מורה {t_id}"
+        for req in data.requirements:
+            if req.teacher_id == t_id and hasattr(req, "teacher") and req.teacher:
+                teacher_name = req.teacher.name
+                break
+
+        breakdown.append({
+            "teacher_id": t_id,
+            "teacher_name": teacher_name,
+            "frontal_hours": frontal,
+            "rubrica_hours": data.teacher_rubrica_map.get(t_id),
+            "max_days": None,
+            "min_days": min_days,
+            "source": "מינימום ידני",
         })
 
     if breakdown:
         variables.brain_info[brain_id] = {
-            "name": "ימי עבודה מקסימליים לפי עוז לתמורה",
+            "name": "ימי עבודה לפי עוז לתמורה",
             "weight": 0,
             "is_hard": True,
             "breakdown": breakdown,
