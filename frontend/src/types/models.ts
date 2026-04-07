@@ -19,12 +19,23 @@ export interface Grade {
   school_id: number;
 }
 
+export interface HomeroomConfig {
+  meet_hard_count: number;
+  meet_soft_weight: number;
+  open_sunday: boolean;
+  open_sunday_type: "HARD" | "SOFT";
+  open_sunday_weight: number;
+  open_other: boolean;
+  open_other_weight: number;
+}
+
 export interface ClassGroup {
   id: number;
   name: string;
   grade_id: number;
   school_id: number;
   homeroom_daily_required: boolean;
+  homeroom_config: HomeroomConfig | null;
 }
 
 // ─── Teacher ─────────────────────────────────────────────

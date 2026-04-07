@@ -1069,32 +1069,48 @@ def _apply_plenary_preferred_no_overlap(
 
 _HOMEROOM_DAILY_WEIGHT = 95  # Very high — top priority
 
+_DEFAULT_HOMEROOM_CONFIG = {
+    "meet_hard_count": 4,
+    "meet_soft_weight": 80,
+    "open_sunday": True,
+    "open_sunday_type": "HARD",
+    "open_sunday_weight": 90,
+    "open_other": True,
+    "open_other_weight": 60,
+}
+
 
 def _apply_homeroom_daily_meeting(
     model: cp_model.CpModel,
     data: SolverData,
     variables: SolverVariables,
 ) -> None:
-    """Brain principle: homeroom teacher should teach their class every day.
+    """Brain principle: homeroom teacher constraints from homeroom_config.
 
-    Per-class behavior:
-    - homeroom_daily_required=True → HARD constraint (must teach every day at school)
-    - homeroom_daily_required=False → SOFT constraint (preferred, weight 95)
-
-    Excludes math/English הקבצות taught by other teachers (naturally excluded
-    since we only look at lessons taught by the homeroom teacher herself).
+    Three sub-constraints per class (all driven by homeroom_config JSON):
+    1. Meet days — teacher must teach her class on specified days (HARD or SOFT).
+    2. Open Sunday — teacher teaches her class at period 1 on Sunday (HARD or SOFT).
+    3. Open other days — teacher teaches her class in morning (periods 1-4) on
+       other days (always SOFT, weight decays 25% per period from 1).
     """
     if not data.homeroom_map:
         return
 
-    # Build class_id -> class_name and class_id -> homeroom_daily_required
+    # Build class_id -> config map
+    class_config_map: dict[int, dict] = {}
     class_name_map: dict[int, str] = {}
-    class_required_map: dict[int, bool] = {}
     for cg in data.class_groups:
         class_name_map[cg.id] = cg.name
-        class_required_map[cg.id] = getattr(cg, "homeroom_daily_required", False)
+        cfg = getattr(cg, "homeroom_config", None)
+        if cfg:
+            class_config_map[cg.id] = cfg
+        elif getattr(cg, "homeroom_daily_required", False):
+            # Legacy fallback
+            class_config_map[cg.id] = {**_DEFAULT_HOMEROOM_CONFIG, "meet_type": "HARD"}
+        else:
+            class_config_map[cg.id] = {**_DEFAULT_HOMEROOM_CONFIG, "meet_type": "SOFT", "meet_weight": _HOMEROOM_DAILY_WEIGHT}
 
-    # Build teacher_id -> set of days teacher has ANY presence (lessons, tracks, meetings)
+    # Build teacher_id -> set of days teacher has ANY presence
     teacher_active_days: dict[int, dict[str, list[cp_model.IntVar]]] = {}
     for key, var in variables.x.items():
         _c, _s, t_id, day, _p = key
@@ -1106,7 +1122,6 @@ def _apply_homeroom_daily_meeting(
                     tk_id, day, _p = key
                     if tk_id == track.id:
                         teacher_active_days.setdefault(track.teacher_id, {}).setdefault(day, []).append(var)
-    # Meetings count as presence — if teacher attends a meeting she's at school
     for key, var in variables.x_meeting.items():
         m_id, day, _p = key
         meeting = next((m for m in data.meetings if m.id == m_id), None)
@@ -1117,85 +1132,192 @@ def _apply_homeroom_daily_meeting(
                 teacher_active_days.setdefault(teacher.id, {}).setdefault(day, []).append(var)
 
     brain_id = _next_brain_id() - 1
-    has_any_penalty = False
+    has_meet_penalty = False
+    has_open_penalty = False
 
-    # כינוס lessons don't count as "meeting the class"
     kinoos_subject_ids: set[int] = {
         s.id for s in data.all_subjects if s.name and "כינוס" in s.name
     }
 
+    # Pre-build lookup: (teacher_id, class_id, day) → list[var] (excl. כינוס)
+    # This avoids scanning all variables.x per teacher in the loop below.
+    hr_lesson_vars: dict[tuple[int, int, str], list[cp_model.IntVar]] = {}
+    for key, var in variables.x.items():
+        c_id, s_id, t_id, day, _p = key
+        if s_id not in kinoos_subject_ids:
+            hr_lesson_vars.setdefault((t_id, c_id, day), []).append(var)
+
+    # Pre-build track lookup: teacher_id → list of (track, serves_class_ids)
+    hr_track_vars: dict[tuple[int, int, str], list[cp_model.IntVar]] = {}
+    for cluster in data.clusters:
+        for track in cluster.tracks:
+            if track.teacher_id is None:
+                continue
+            if track.name and "כינוס" in track.name:
+                continue
+            served_class_ids: list[int] = []
+            if track.source_class_id:
+                served_class_ids.append(track.source_class_id)
+            else:
+                served_class_ids.extend(c.id for c in cluster.source_classes)
+            for key, var in variables.x_track.items():
+                tk_id, day, _p = key
+                if tk_id == track.id:
+                    for sc_id in served_class_ids:
+                        hr_track_vars.setdefault((track.teacher_id, sc_id, day), []).append(var)
+
+    # Pre-build per-slot lookup for morning opening (periods 1-4 only)
+    hr_slot_vars: dict[tuple[int, int, str, int], list[cp_model.IntVar]] = {}
+    for key, var in variables.x.items():
+        c_id, s_id, t_id, day, period = key
+        if period <= 4 and s_id not in kinoos_subject_ids:
+            hr_slot_vars.setdefault((t_id, c_id, day, period), []).append(var)
+
+    meet_brain_id = brain_id
+    open_brain_id = brain_id - 1
+
     for teacher_id, class_id in data.homeroom_map.items():
-        is_required = class_required_map.get(class_id, False)
+        cfg = class_config_map.get(class_id, _DEFAULT_HOMEROOM_CONFIG)
         class_name = class_name_map.get(class_id, str(class_id))
+        meet_hard_count: int = cfg.get("meet_hard_count", 0)
+        if meet_hard_count == 0:
+            raw = cfg.get("meet_days_count")
+            if raw is not None:
+                meet_hard_count = raw
+            else:
+                legacy_days = cfg.get("meet_days", [])
+                meet_hard_count = len(legacy_days) if legacy_days else 4
+        meet_soft_weight: int = cfg.get("meet_soft_weight", cfg.get("meet_weight", 80))
 
-        # Find lessons where this teacher teaches this class (excluding כינוס)
+        # Collect lesson vars per day from pre-built lookups
         relevant_keys: dict[str, list[cp_model.IntVar]] = {}
-        for key, var in variables.x.items():
-            c_id, s_id, t_id, day, _p = key
-            if c_id == class_id and t_id == teacher_id and s_id not in kinoos_subject_ids:
-                relevant_keys.setdefault(day, []).append(var)
-
-        # Also check tracks that serve this class (excluding כינוס tracks)
-        for cluster in data.clusters:
-            for track in cluster.tracks:
-                if track.teacher_id != teacher_id:
-                    continue
-                # Skip כינוס tracks — they don't count as meeting the class
-                if track.name and "כינוס" in track.name:
-                    continue
-                serves_class = False
-                if track.source_class_id == class_id:
-                    serves_class = True
-                elif not track.source_class_id:
-                    source_ids = [c.id for c in cluster.source_classes]
-                    if class_id in source_ids:
-                        serves_class = True
-                if serves_class:
-                    for key, var in variables.x_track.items():
-                        tk_id, day, _p = key
-                        if tk_id == track.id:
-                            relevant_keys.setdefault(day, []).append(var)
+        for day in data.days:
+            lesson_v = hr_lesson_vars.get((teacher_id, class_id, day), [])
+            track_v = hr_track_vars.get((teacher_id, class_id, day), [])
+            combined = lesson_v + track_v
+            if combined:
+                relevant_keys[day] = combined
 
         if not relevant_keys:
             continue
 
+        # ── Sub-constraint 1: Meet N days (out of teaching days) ──
+        # Build per-day bools: teaches_class_on[day] = 1 iff teacher teaches her class that day
+        teaches_class_bools: list[cp_model.IntVar] = []
         for day in data.days:
             day_vars = relevant_keys.get(day, [])
             if not day_vars:
                 continue
-
             teaches_class = model.new_bool_var(
                 f"brain_homeroom_t{teacher_id}_c{class_id}_{day}"
             )
             model.add_max_equality(teaches_class, day_vars)
 
-            if is_required:
-                # HARD: if teacher is at school this day, she must teach her class
-                all_teacher_day_vars = teacher_active_days.get(teacher_id, {}).get(day, [])
-                if all_teacher_day_vars:
-                    teacher_at_school = model.new_bool_var(
-                        f"brain_homeroom_atschool_t{teacher_id}_{day}"
-                    )
-                    model.add_max_equality(teacher_at_school, all_teacher_day_vars)
-                    # If at school → must teach homeroom class
-                    model.add(teaches_class >= teacher_at_school)
-            else:
-                # SOFT: penalize missing
-                penalty_idx = len(variables.penalties)
-                variables.penalties.append(
-                    (teaches_class.negated(), _HOMEROOM_DAILY_WEIGHT, brain_id)
+            # Only count days the teacher is actually at school
+            all_teacher_day_vars = teacher_active_days.get(teacher_id, {}).get(day, [])
+            if all_teacher_day_vars:
+                teacher_at_school = model.new_bool_var(
+                    f"brain_homeroom_atschool_t{teacher_id}_{day}"
                 )
-                variables.penalty_labels[penalty_idx] = class_name
-                has_any_penalty = True
+                model.add_max_equality(teacher_at_school, all_teacher_day_vars)
+                # meets_and_present = teaches_class AND teacher_at_school
+                meets_and_present = model.new_bool_var(
+                    f"brain_homeroom_meets_t{teacher_id}_c{class_id}_{day}"
+                )
+                model.add_min_equality(meets_and_present, [teaches_class, teacher_at_school])
+                teaches_class_bools.append(meets_and_present)
 
-    if has_any_penalty:
-        variables.brain_info[brain_id] = {
-            "name": "מחנכת פוגשת כיתה כל יום",
-            "weight": _HOMEROOM_DAILY_WEIGHT,
+        if teaches_class_bools:
+            total_meets = model.new_int_var(
+                0, len(teaches_class_bools),
+                f"brain_homeroom_total_t{teacher_id}_c{class_id}",
+            )
+            model.add(total_meets == sum(teaches_class_bools))
+
+            # HARD floor: must meet at least meet_hard_count days
+            if meet_hard_count > 0:
+                model.add(total_meets >= meet_hard_count)
+
+            # SOFT: penalize each remaining day not met (above the hard floor)
+            if meet_soft_weight > 0:
+                for meets_bool in teaches_class_bools:
+                    penalty_idx = len(variables.penalties)
+                    variables.penalties.append(
+                        (meets_bool.negated(), meet_soft_weight, meet_brain_id)
+                    )
+                    variables.penalty_labels[penalty_idx] = class_name
+                    has_meet_penalty = True
+
+        # ── Per-slot lookup for morning opening (from pre-built index) ──
+
+        # ── Sub-constraint 2: Open Sunday (period 1) ──
+        open_sunday = cfg.get("open_sunday", False)
+        open_sunday_type = cfg.get("open_sunday_type", "HARD")
+        open_sunday_weight = cfg.get("open_sunday_weight", 90)
+
+        if open_sunday:
+            sunday = None
+            for d in data.days:
+                if str(d) == "SUNDAY" or (hasattr(d, "value") and d.value == "SUNDAY"):
+                    sunday = d
+                    break
+            if sunday:
+                p1_vars = hr_slot_vars.get((teacher_id, class_id, sunday, 1), [])
+                if p1_vars:
+                    if open_sunday_type == "HARD":
+                        model.add(sum(p1_vars) >= 1)
+                    else:
+                        has_p1 = model.new_bool_var(
+                            f"brain_open_sun_t{teacher_id}_c{class_id}"
+                        )
+                        model.add_max_equality(has_p1, p1_vars)
+                        penalty_idx = len(variables.penalties)
+                        variables.penalties.append(
+                            (has_p1.negated(), open_sunday_weight, open_brain_id)
+                        )
+                        variables.penalty_labels[penalty_idx] = f"{class_name} (ראשון)"
+                        has_open_penalty = True
+
+        # ── Sub-constraint 3: Open other days (periods 1-4, soft, decay 25%) ──
+        open_other = cfg.get("open_other", False)
+        open_other_weight = cfg.get("open_other_weight", 60)
+
+        if open_other:
+            for day in data.days:
+                is_sunday = str(day) == "SUNDAY" or (hasattr(day, "value") and day.value == "SUNDAY")
+                if is_sunday:
+                    continue
+                for period in range(1, 5):
+                    decay = 1.0 - 0.25 * (period - 1)
+                    w = int(open_other_weight * decay)
+                    if w <= 0:
+                        continue
+                    p_vars = hr_slot_vars.get((teacher_id, class_id, day, period), [])
+                    if p_vars:
+                        has_p = model.new_bool_var(
+                            f"brain_open_other_t{teacher_id}_c{class_id}_{day}_p{period}"
+                        )
+                        model.add_max_equality(has_p, p_vars)
+                        penalty_idx = len(variables.penalties)
+                        variables.penalties.append(
+                            (has_p, -w, open_brain_id)
+                        )
+                        variables.penalty_labels[penalty_idx] = f"{class_name} ({day} שעה {period})"
+                        has_open_penalty = True
+
+    if has_meet_penalty:
+        variables.brain_info[meet_brain_id] = {
+            "name": "מחנכת פוגשת כיתה",
+            "weight": 0,
         }
-        brain_id -= 1
 
-    _update_brain_id(brain_id)
+    if has_open_penalty:
+        variables.brain_info[open_brain_id] = {
+            "name": "מחנכת פותחת בוקר",
+            "weight": 0,
+        }
+
+    _update_brain_id(open_brain_id - 1 if has_open_penalty else meet_brain_id - 1 if has_meet_penalty else brain_id)
 
 
 # ── Max consecutive meeting hours without frontal lesson ──────────────────

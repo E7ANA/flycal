@@ -41,6 +41,13 @@ class ClassGroup(Base):
     # When True: homeroom teacher MUST teach this class every day she's at school (HARD)
     # When False (default): preferred but not mandatory (SOFT)
     homeroom_daily_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Rich homeroom config: meeting days, morning opening, hard/soft, weights
+    # {
+    #   "meet_days_count": 4,  "meet_type": "HARD"|"SOFT",  "meet_weight": 80,
+    #   "open_sunday": true,  "open_sunday_type": "HARD"|"SOFT",  "open_sunday_weight": 90,
+    #   "open_other": true,  "open_other_weight": 60
+    # }
+    homeroom_config: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
     shahaf_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     grade: Mapped["Grade"] = relationship(back_populates="class_groups")

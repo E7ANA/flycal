@@ -342,7 +342,8 @@ def add_system_constraints(
     _add_meeting_consecutive_periods(model, data, variables)
     _add_meetings_on_teaching_days(model, data, variables)
     _add_teacher_blocked_slots(model, data, variables)
-    _add_homeroom_must_teach_sunday(model, data, variables)
+    # NOTE: homeroom Sunday opening is now handled by brain._apply_homeroom_daily_meeting
+    # via homeroom_config (configurable HARD/SOFT per class)
     _add_pinned_lessons(model, data, variables)
     _add_pinned_meetings(model, data, variables)
     _add_pinned_tracks(model, data, variables)
@@ -1083,35 +1084,6 @@ def _add_teacher_blocked_slots(
 # ---------------------------------------------------------------------------
 # System Constraint 9b: Homeroom Teachers Must Teach on Sunday
 # Homeroom teachers (מחנכות) cannot have Sunday as a free day.
-# ---------------------------------------------------------------------------
-def _add_homeroom_must_teach_sunday(
-    model: cp_model.CpModel, data: SolverData, variables: SolverVariables
-) -> None:
-    """Homeroom teacher must teach HER class at period 1 on Sunday (open the morning)."""
-    if not data.homeroom_map:
-        return
-
-    sunday = None
-    for d in data.days:
-        if str(d) == "SUNDAY" or (hasattr(d, 'value') and d.value == "SUNDAY"):
-            sunday = d
-            break
-    if sunday is None:
-        return
-
-    for teacher_id, class_id in data.homeroom_map.items():
-        # Find vars where this teacher teaches THIS class on Sunday period 1
-        period1_vars: list[cp_model.IntVar] = []
-        for key, var in variables.x.items():
-            c_id, _s, t_id, day, period = key
-            if t_id == teacher_id and c_id == class_id and day == sunday and period == 1:
-                period1_vars.append(var)
-
-        if period1_vars:
-            # Must teach her class at Sunday period 1
-            model.add(sum(period1_vars) >= 1)
-
-
 # ---------------------------------------------------------------------------
 # System Constraint 10: Pinned Lessons
 # Lessons pinned to specific timeslots must be scheduled exactly there.

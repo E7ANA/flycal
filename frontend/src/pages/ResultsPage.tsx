@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, BarChart3, Eye, Download, FileText, AlertTriangle, Users, Check, X, ClipboardList, ChevronDown, ChevronUp, ChevronLeft, ChevronRight } from "lucide-react";
+import { Trash2, Eye, Download, FileText, AlertTriangle, Users, Check, X, ClipboardList, ChevronLeft, ChevronRight } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import { useAuthStore } from "@/stores/authStore";
@@ -411,95 +411,6 @@ export default function ResultsPage() {
       {/* Selected Solution View */}
       {selectedSolutionId && (
         <>
-          {/* Score Breakdown */}
-          {scoreBreakdown && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <BarChart3 className="h-5 w-5" />
-                  פירוט ציון
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center gap-6 mb-4">
-                  <div>
-                    <span className="text-3xl font-bold">
-                      {scoreBreakdown.total_score}
-                    </span>
-                    <span className="text-muted-foreground text-sm">
-                      /100
-                    </span>
-                  </div>
-                  <Badge variant="success">
-                    {scoreBreakdown.satisfied_hard}/
-                    {scoreBreakdown.total_hard} אילוצי חובה
-                  </Badge>
-                </div>
-                {scoreBreakdown.soft_scores.length > 0 && (
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium">אילוצים רכים:</p>
-                    {scoreBreakdown.soft_scores.map((s) => (
-                      <React.Fragment key={s.constraint_id}>
-                      <div
-                        className="flex items-center gap-3" title={`אילוץ #${s.constraint_id}`}
-                      >
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-sm truncate">
-                              <span className="text-xs text-muted-foreground font-mono">#{s.constraint_id}</span>{" "}
-                              {s.name}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {Math.round(s.satisfaction * 100)}%
-                            </span>
-                          </div>
-                          <div className="h-2 bg-muted rounded-full overflow-hidden">
-                            <div
-                              className="h-full rounded-full transition-all"
-                              style={{
-                                width: `${s.satisfaction * 100}%`,
-                                backgroundColor:
-                                  s.satisfaction > 0.8
-                                    ? "#22c55e"
-                                    : s.satisfaction > 0.5
-                                      ? "#eab308"
-                                      : "#ef4444",
-                              }}
-                            />
-                          </div>
-                        </div>
-                        <Badge variant="outline" className="shrink-0">
-                          משקל {s.weight}
-                        </Badge>
-                      </div>
-                      {/* Per-class/label breakdown */}
-                      {s.label_breakdown && s.label_breakdown.length > 0 && s.satisfaction < 1 && (
-                        <div className="mr-4 mb-2 flex flex-wrap gap-1">
-                          {s.label_breakdown.map((lb) => (
-                            <Badge
-                              key={lb.label}
-                              variant="outline"
-                              className={`text-xs ${
-                                lb.satisfaction >= 1
-                                  ? "border-emerald-300 text-emerald-700"
-                                  : lb.satisfaction > 0.5
-                                    ? "border-amber-300 text-amber-700"
-                                    : "border-red-300 text-red-700"
-                              }`}
-                            >
-                              {lb.label}: {Math.round(lb.satisfaction * 100)}%
-                            </Badge>
-                          ))}
-                        </div>
-                      )}
-                    </React.Fragment>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
           {/* Timetable View — shown FIRST */}
           <Card>
             <CardHeader>
@@ -898,253 +809,196 @@ function ScoreBar({ value, max, className = "" }: { value: number; max: number; 
 }
 
 function SolutionSummaryCard({ summary }: { summary: import("@/api/solver").SolutionSummary }) {
-  const [expandedHomeroom, setExpandedHomeroom] = useState(false);
-  const [expandedBrain, setExpandedBrain] = useState(false);
+  const [tab, setTab] = useState<"hard" | "soft" | "homeroom">("hard");
 
   const { homeroom_summary, brain_hard, brain_soft, user_constraints } = summary;
+
+  // Combine all soft items for the soft tab
+  const allSoftItems = [
+    ...brain_soft.items.map((b) => ({ ...b, source: "מוח" })),
+    ...user_constraints.items.map((s) => ({ ...s, source: "משתמש" })),
+  ].sort((a, b) => a.satisfaction - b.satisfaction);
+
+  const totalSoftWeight = brain_soft.total_weight + user_constraints.items.reduce((s, c) => s + c.weight, 0);
+  const totalSoftScored = brain_soft.total_scored + user_constraints.items.reduce((s, c) => s + c.weighted_score, 0);
+
+  const tabs = [
+    { id: "hard" as const, label: "אילוצי חובה", badge: `${brain_hard.satisfied}/${brain_hard.total}` },
+    { id: "soft" as const, label: "אילוצים רכים", badge: `${Math.round((totalSoftScored / Math.max(totalSoftWeight, 1)) * 100)}%` },
+    { id: "homeroom" as const, label: "מחנכות", badge: String(homeroom_summary.length) },
+  ];
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <ClipboardList className="h-5 w-5" />
-          סיכום פתרון
-          <Badge variant="outline" className="mr-auto">{summary.total_score}/100</Badge>
+          ניתוח פתרון
+          <div className="mr-auto flex items-center gap-3">
+            <span className="text-3xl font-bold">{summary.total_score}</span>
+            <span className="text-muted-foreground text-sm">/100</span>
+          </div>
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-6">
-        {/* ── Homeroom Summary ── */}
-        <div>
-          <button
-            className="flex items-center gap-2 w-full text-right font-medium text-sm mb-2 cursor-pointer"
-            onClick={() => setExpandedHomeroom(!expandedHomeroom)}
-          >
-            {expandedHomeroom ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            מחנכות — פתיחת בוקר ונוכחות ({homeroom_summary.length})
-          </button>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm border-collapse">
-              <thead>
-                <tr className="border-b text-muted-foreground">
-                  <th className="text-right py-1.5 px-2 font-medium">מחנכת</th>
-                  <th className="text-right py-1.5 px-2 font-medium">כיתה</th>
-                  <th className="text-center py-1.5 px-2 font-medium">נוכחות</th>
-                  <th className="text-center py-1.5 px-2 font-medium">פתיחת בוקר</th>
-                  <th className="text-right py-1.5 px-2 font-medium">ימים חסרים</th>
-                  {expandedHomeroom && <th className="text-right py-1.5 px-2 font-medium">פתיחה בימים</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {homeroom_summary.map((h) => (
-                  <tr key={h.teacher_id} className="border-b border-muted last:border-0 hover:bg-muted/50">
-                    <td className="py-1.5 px-2">{h.teacher_name}</td>
-                    <td className="py-1.5 px-2">{h.class_name}</td>
-                    <td className="text-center py-1.5 px-2">
-                      <Badge variant={h.present_days >= 4 ? "success" : h.present_days >= 3 ? "warning" : "destructive"}>
-                        {h.present_days}/{h.total_days}
-                      </Badge>
-                    </td>
-                    <td className="text-center py-1.5 px-2">
-                      <Badge variant={h.opens_morning_count >= 3 ? "success" : h.opens_morning_count >= 1 ? "warning" : "destructive"}>
-                        {h.opens_morning_count}/{h.total_days}
-                      </Badge>
-                    </td>
-                    <td className="py-1.5 px-2 text-muted-foreground text-xs">
-                      {h.absent_days.length > 0 ? h.absent_days.join(", ") : "—"}
-                    </td>
-                    {expandedHomeroom && (
-                      <td className="py-1.5 px-2 text-xs">
-                        {h.opens_morning_days.length > 0 ? h.opens_morning_days.join(", ") : "—"}
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {expandedHomeroom && homeroom_summary.length > 0 && (
-            <div className="mt-3 space-y-2">
-              {homeroom_summary.map((h) => (
-                <div key={h.teacher_id} className="bg-muted/30 rounded p-2 text-xs">
-                  <span className="font-medium">{h.teacher_name} — {h.class_name}:</span>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {h.day_details.map((dd) => (
-                      <span
-                        key={dd.day}
-                        className={`inline-block px-1.5 py-0.5 rounded ${dd.opens ? "bg-emerald-100 text-emerald-800" : "bg-muted text-muted-foreground"}`}
-                      >
-                        {dd.day_label}: שעות {dd.periods.join(",")}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+      <CardContent className="space-y-4">
+        {/* ── Tabs ── */}
+        <div className="flex gap-1 border-b">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors cursor-pointer ${
+                tab === t.id
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {t.label}
+              <Badge variant="outline" className="text-[10px] mr-2">{t.badge}</Badge>
+            </button>
+          ))}
         </div>
 
-        {/* ── Class End Times ── */}
-        {summary.class_end_times && summary.class_end_times.length > 0 && (
-          <div>
-            <p className="font-medium text-sm mb-2">שעות סיום לפי כיתה ויום</p>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="border-b text-muted-foreground">
-                    <th className="text-right py-1.5 px-2 font-medium">כיתה</th>
-                    {["ראשון","שני","שלישי","רביעי","חמישי"].map((d) => (
-                      <th key={d} className="text-center py-1.5 px-1 font-medium">{d}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {summary.class_end_times.map((ct) => (
-                    <tr key={ct.class_id} className="border-b border-muted last:border-0 hover:bg-muted/50">
-                      <td className="py-1 px-2 font-medium">{ct.class_name}</td>
-                      {["ראשון","שני","שלישי","רביעי","חמישי"].map((d) => {
-                        const val = ct.end_times[d] || 0;
-                        return (
-                          <td key={d} className="text-center py-1 px-1">
-                            {val > 0 ? (
-                              <span className={`inline-block w-6 h-6 leading-6 rounded text-xs font-medium ${
-                                val >= 8 ? "bg-red-100 text-red-800" : val >= 7 ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
-                              }`}>
-                                {val}
-                              </span>
-                            ) : "—"}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        {/* ── Tab: אילוצי חובה ── */}
+        {tab === "hard" && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <Badge variant={brain_hard.satisfied === brain_hard.total ? "success" : "destructive"} className="text-sm px-3 py-1">
+                {brain_hard.satisfied === brain_hard.total ? (
+                  <><Check className="h-4 w-4 ml-1" /> כל אילוצי החובה מסופקים</>
+                ) : (
+                  <><X className="h-4 w-4 ml-1" /> {brain_hard.total - brain_hard.satisfied} אילוצים לא מסופקים</>
+                )}
+              </Badge>
             </div>
-          </div>
-        )}
-
-        {/* ── Teacher End Times ── */}
-        {summary.teacher_end_times && summary.teacher_end_times.length > 0 && (
-          <div>
-            <p className="font-medium text-sm mb-2">שעות סיום לפי מורה ויום</p>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="border-b text-muted-foreground">
-                    <th className="text-right py-1.5 px-2 font-medium">מורה</th>
-                    {["ראשון","שני","שלישי","רביעי","חמישי"].map((d) => (
-                      <th key={d} className="text-center py-1.5 px-1 font-medium">{d}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {summary.teacher_end_times.map((tt) => (
-                    <tr key={tt.teacher_id} className="border-b border-muted last:border-0 hover:bg-muted/50">
-                      <td className="py-1 px-2 font-medium">
-                        {tt.teacher_name}
-                        {tt.is_homeroom && <span className="text-xs text-muted-foreground mr-1">(מחנכת)</span>}
-                      </td>
-                      {["ראשון","שני","שלישי","רביעי","חמישי"].map((d) => {
-                        const val = tt.end_times[d] || 0;
-                        return (
-                          <td key={d} className="text-center py-1 px-1">
-                            {val > 0 ? (
-                              <span className={`inline-block w-6 h-6 leading-6 rounded text-xs font-medium ${
-                                val >= 8 ? "bg-red-100 text-red-800" : val >= 7 ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
-                              }`}>
-                                {val}
-                              </span>
-                            ) : "—"}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* ── Brain Rules ── */}
-        <div>
-          <button
-            className="flex items-center gap-2 w-full text-right font-medium text-sm mb-2 cursor-pointer"
-            onClick={() => setExpandedBrain(!expandedBrain)}
-          >
-            {expandedBrain ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            כללי מוח ({brain_hard.total} חובה, {brain_soft.items.length} רכים)
-          </button>
-
-          {/* Hard brain rules summary */}
-          <div className="flex items-center gap-2 mb-2 text-sm">
-            <Badge variant={brain_hard.satisfied === brain_hard.total ? "success" : "destructive"}>
-              {brain_hard.satisfied}/{brain_hard.total} חובה מסופקים
-            </Badge>
-            <span className="text-muted-foreground">|</span>
-            <span className="text-muted-foreground text-xs">
-              ניקוד רך: {brain_soft.total_scored.toFixed(0)}/{brain_soft.total_weight.toFixed(0)}
-            </span>
-          </div>
-
-          {/* Soft brain rules */}
-          <div className="space-y-1.5">
-            {brain_soft.items
-              .filter((b) => expandedBrain || b.satisfaction < 1)
-              .map((b) => (
-                <div key={b.constraint_id} className="flex items-center gap-2 text-sm">
-                  <span className="flex-1 truncate">
-                    <span className="text-xs text-muted-foreground font-mono">#{b.constraint_id}</span>{" "}
-                    {b.name}
-                  </span>
-                  <ScoreBar value={b.weighted_score} max={b.weight} className="w-28" />
-                  <span className="text-xs text-muted-foreground w-16 text-left">
-                    {b.weighted_score.toFixed(0)}/{b.weight}
-                  </span>
+            <div className="space-y-1">
+              {brain_hard.items.map((b) => (
+                <div key={b.constraint_id} className="flex items-center gap-2 py-1.5 border-b border-muted last:border-0">
+                  {b.satisfaction === 1 ? (
+                    <Check className="h-4 w-4 text-emerald-500 shrink-0" />
+                  ) : (
+                    <X className="h-4 w-4 text-red-500 shrink-0" />
+                  )}
+                  <span className="text-sm flex-1">{b.name}</span>
+                  <Badge variant={b.satisfaction === 1 ? "success" : "destructive"} className="text-[10px]">
+                    {b.satisfaction === 1 ? "מסופק" : "נכשל"}
+                  </Badge>
                 </div>
               ))}
-            {!expandedBrain && brain_soft.items.filter((b) => b.satisfaction < 1).length === 0 && (
-              <p className="text-xs text-muted-foreground">כל האילוצים הרכים מסופקים במלואם</p>
-            )}
+              {brain_hard.items.length === 0 && (
+                <p className="text-sm text-muted-foreground">אין אילוצי חובה</p>
+              )}
+            </div>
           </div>
+        )}
 
-          {expandedBrain && brain_hard.items.length > 0 && (
-            <div className="mt-3 space-y-1">
-              <p className="text-xs font-medium text-muted-foreground">אילוצי חובה:</p>
-              <div className="flex flex-wrap gap-1">
-                {brain_hard.items.map((b) => (
-                  <Badge
-                    key={b.constraint_id}
-                    variant={b.satisfaction === 1 ? "success" : "destructive"}
-                    className="text-xs"
-                  >
-                    {b.satisfaction === 1 ? <Check className="h-3 w-3 ml-1" /> : <X className="h-3 w-3 ml-1" />}
-                    #{b.constraint_id} {b.name}
-                  </Badge>
-                ))}
+        {/* ── Tab: אילוצים רכים ── */}
+        {tab === "soft" && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-4 text-sm">
+              <span className="text-muted-foreground">
+                ניקוד כולל: <strong>{totalSoftScored.toFixed(0)}</strong> / {totalSoftWeight.toFixed(0)}
+              </span>
+              <div className="h-3 flex-1 max-w-xs bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${totalSoftWeight > 0 ? (totalSoftScored / totalSoftWeight) * 100 : 0}%`,
+                    backgroundColor: totalSoftScored / Math.max(totalSoftWeight, 1) > 0.8 ? "#22c55e" : totalSoftScored / Math.max(totalSoftWeight, 1) > 0.5 ? "#eab308" : "#ef4444",
+                  }}
+                />
               </div>
             </div>
-          )}
-        </div>
-
-        {/* ── User Constraints ── */}
-        {user_constraints.items.length > 0 && (
-          <div>
-            <p className="font-medium text-sm mb-2">אילוצי משתמש</p>
             <div className="space-y-1.5">
-              {user_constraints.items.map((s) => (
-                <div key={s.constraint_id} className="flex items-center gap-2 text-sm">
-                  <span className="flex-1 truncate">
-                    <span className="text-xs text-muted-foreground font-mono">#{s.constraint_id}</span>{" "}
-                    {s.name}
-                  </span>
-                  <ScoreBar value={s.weighted_score} max={s.weight} className="w-28" />
-                  <span className="text-xs text-muted-foreground w-16 text-left">
-                    {s.weighted_score.toFixed(0)}/{s.weight}
-                  </span>
-                </div>
+              {allSoftItems.map((s) => (
+                <React.Fragment key={`${s.source}-${s.constraint_id}`}>
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="flex-1 min-w-0 truncate">{s.name}</span>
+                    <ScoreBar value={s.weighted_score} max={s.weight} className="w-32" />
+                    <span className="text-xs text-muted-foreground w-14 text-left shrink-0">
+                      {s.weighted_score.toFixed(0)}/{s.weight}
+                    </span>
+                  </div>
+                  {(s as any).label_breakdown && (s as any).label_breakdown.length > 0 && s.satisfaction < 1 && (
+                    <div className="mr-4 mb-1 flex flex-wrap gap-1">
+                      {(s as any).label_breakdown.map((lb: any) => (
+                        <Badge
+                          key={lb.label}
+                          variant="outline"
+                          className={`text-[10px] ${
+                            lb.satisfaction >= 1 ? "border-emerald-300 text-emerald-700"
+                              : lb.satisfaction > 0.5 ? "border-amber-300 text-amber-700"
+                              : "border-red-300 text-red-700"
+                          }`}
+                        >
+                          {lb.label}: {Math.round(lb.satisfaction * 100)}%
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </React.Fragment>
               ))}
+              {allSoftItems.length === 0 && (
+                <p className="text-sm text-muted-foreground">אין אילוצים רכים</p>
+              )}
             </div>
+          </div>
+        )}
+
+        {/* ── Tab: מחנכות ── */}
+        {tab === "homeroom" && (
+          <div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="border-b text-muted-foreground">
+                    <th className="text-right py-1.5 px-2 font-medium">מחנכת</th>
+                    <th className="text-right py-1.5 px-2 font-medium">כיתה</th>
+                    <th className="text-center py-1.5 px-2 font-medium">נוכחות</th>
+                    <th className="text-center py-1.5 px-2 font-medium">פתיחת בוקר</th>
+                    <th className="text-right py-1.5 px-2 font-medium">ימים חסרים</th>
+                    <th className="text-right py-1.5 px-2 font-medium">פירוט ימים</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {homeroom_summary.map((h) => (
+                    <tr key={h.teacher_id} className="border-b border-muted last:border-0 hover:bg-muted/50">
+                      <td className="py-1.5 px-2">{h.teacher_name}</td>
+                      <td className="py-1.5 px-2">{h.class_name}</td>
+                      <td className="text-center py-1.5 px-2">
+                        <Badge variant={h.present_days >= 4 ? "success" : h.present_days >= 3 ? "warning" : "destructive"}>
+                          {h.present_days}/{h.total_days}
+                        </Badge>
+                      </td>
+                      <td className="text-center py-1.5 px-2">
+                        <Badge variant={h.opens_morning_count >= 3 ? "success" : h.opens_morning_count >= 1 ? "warning" : "destructive"}>
+                          {h.opens_morning_count}/{h.total_days}
+                        </Badge>
+                      </td>
+                      <td className="py-1.5 px-2 text-muted-foreground text-xs">
+                        {h.absent_days.length > 0 ? h.absent_days.join(", ") : "—"}
+                      </td>
+                      <td className="py-1.5 px-2">
+                        <div className="flex flex-wrap gap-0.5">
+                          {h.day_details.map((dd) => (
+                            <span
+                              key={dd.day}
+                              className={`inline-block px-1 py-0.5 rounded text-[10px] ${dd.opens ? "bg-emerald-100 text-emerald-800" : dd.periods.length > 0 ? "bg-muted text-muted-foreground" : "bg-red-50 text-red-400"}`}
+                              title={dd.periods.length > 0 ? `שעות ${dd.periods.join(",")}` : "לא נוכחת"}
+                            >
+                              {dd.day_label}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {homeroom_summary.length === 0 && (
+              <p className="text-sm text-muted-foreground text-center py-4">אין מחנכות מוגדרות</p>
+            )}
           </div>
         )}
       </CardContent>

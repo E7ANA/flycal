@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Pencil, Trash2, Calendar } from "lucide-react";
@@ -13,6 +13,8 @@ import {
 import { fetchSubjects } from "@/api/subjects";
 import { fetchClasses } from "@/api/classes";
 import { fetchSchool } from "@/api/schools";
+import { fetchConstraints, createConstraint, updateConstraint, deleteConstraint } from "@/api/constraints";
+import { fetchMeetings } from "@/api/meetings";
 import { Button } from "@/components/common/Button";
 import { DataTable } from "@/components/common/DataTable";
 import {
@@ -25,7 +27,6 @@ import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { Input } from "@/components/common/Input";
 import { Label } from "@/components/common/Label";
 import { Badge } from "@/components/common/Badge";
-import { InlineConstraints } from "@/components/common/InlineConstraints";
 import type { Teacher, BlockedSlot } from "@/types/models";
 import { getSubjectColor } from "@/lib/subjectColors";
 
@@ -166,10 +167,16 @@ function TeacherFormDialog({
     queryKey: ["school", schoolId],
     queryFn: () => fetchSchool(schoolId),
   });
+  const { data: teacherConstraints = [] } = useQuery({
+    queryKey: ["constraints", schoolId, "teacher", teacher?.id],
+    queryFn: () => fetchConstraints(schoolId),
+    enabled: !!teacher,
+    select: (all) => all.filter((c) => c.target_type === "TEACHER" && c.target_id === teacher?.id),
+  });
+  const existingDayEnd = teacherConstraints.find((c) => c.rule_type === "TEACHER_DAY_END_LIMIT" && c.is_active);
 
   const [name, setName] = useState(teacher?.name ?? "");
   const [maxHours, setMaxHours] = useState(teacher?.max_hours_per_week ?? 40);
-  const [minHours, setMinHours] = useState(teacher?.min_hours_per_week ?? 0);
   const [rubricaHours, setRubricaHours] = useState<string>(
     teacher?.rubrica_hours != null ? String(teacher.rubrica_hours) : "",
   );
@@ -209,6 +216,15 @@ function TeacherFormDialog({
   const [blockedSlots, setBlockedSlots] = useState<BlockedSlot[]>(
     teacher?.blocked_slots ?? [],
   );
+  const [dayEndNumDays, setDayEndNumDays] = useState<string>("");
+  const [dayEndPeriod, setDayEndPeriod] = useState<string>("");
+
+  useEffect(() => {
+    if (existingDayEnd) {
+      setDayEndNumDays(existingDayEnd.parameters?.num_days != null ? String(existingDayEnd.parameters.num_days) : "");
+      setDayEndPeriod(existingDayEnd.parameters?.end_period != null ? String(existingDayEnd.parameters.end_period) : "");
+    }
+  }, [existingDayEnd]);
 
   // Build days and periods from school config
   const schoolDays = school
@@ -239,7 +255,7 @@ function TeacherFormDialog({
         school_id: schoolId,
         name,
         max_hours_per_week: maxHours,
-        min_hours_per_week: minHours || null,
+        min_hours_per_week: null,
         rubrica_hours: rubricaHours !== "" ? Number(rubricaHours) : null,
         max_work_days: maxWorkDays !== "" ? Number(maxWorkDays) : null,
         min_work_days: minWorkDays !== "" ? Number(minWorkDays) : null,
@@ -263,11 +279,11 @@ function TeacherFormDialog({
   });
 
   const updateMut = useMutation({
-    mutationFn: () =>
-      updateTeacher(teacher!.id, {
+    mutationFn: async () => {
+      await updateTeacher(teacher!.id, {
         name,
         max_hours_per_week: maxHours,
-        min_hours_per_week: minHours || null,
+        min_hours_per_week: null,
         rubrica_hours: rubricaHours !== "" ? Number(rubricaHours) : null,
         max_work_days: maxWorkDays !== "" ? Number(maxWorkDays) : null,
         min_work_days: minWorkDays !== "" ? Number(minWorkDays) : null,
@@ -281,9 +297,26 @@ function TeacherFormDialog({
         is_director: isDirector,
         transport_priority: transportPriority !== "" ? Number(transportPriority) : null,
         blocked_slots: blockedSlots,
-      }),
+      });
+      // Save/update/delete TEACHER_DAY_END_LIMIT constraint
+      const hasDayEnd = dayEndNumDays !== "" && dayEndPeriod !== "";
+      if (hasDayEnd) {
+        const payload = {
+          school_id: schoolId, name: `מגבלת סיום יום — ${name}`, description: null,
+          category: "TEACHER" as const, type: "HARD" as const, weight: 100,
+          rule_type: "TEACHER_DAY_END_LIMIT" as const,
+          parameters: { num_days: Number(dayEndNumDays), end_period: Number(dayEndPeriod) },
+          target_type: "TEACHER" as const, target_id: teacher!.id, is_active: true, notes: null,
+        };
+        if (existingDayEnd) await updateConstraint(existingDayEnd.id, payload);
+        else await createConstraint(payload as any);
+      } else if (existingDayEnd) {
+        await deleteConstraint(existingDayEnd.id);
+      }
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["teachers", schoolId] });
+      qc.invalidateQueries({ queryKey: ["constraints", schoolId] });
       toast.success("מורה עודכן/ה");
       onClose();
     },
@@ -330,16 +363,6 @@ function TeacherFormDialog({
               min={0}
               value={maxHours}
               onChange={(e) => setMaxHours(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <Label htmlFor="min-hours">מינ׳ שעות</Label>
-            <Input
-              id="min-hours"
-              type="number"
-              min={0}
-              value={minHours}
-              onChange={(e) => setMinHours(Number(e.target.value))}
             />
           </div>
           <div>
@@ -459,18 +482,6 @@ function TeacherFormDialog({
               <span className="text-sm">מנהלת</span>
             </label>
             <div>
-              <Label htmlFor="transport-priority">עדיפות יום מוקדם (1-100, ריק = ללא)</Label>
-              <Input
-                id="transport-priority"
-                type="number"
-                min={0}
-                max={100}
-                value={transportPriority}
-                onChange={(e) => setTransportPriority(e.target.value)}
-                placeholder="ללא"
-              />
-            </div>
-            <div>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
@@ -543,14 +554,55 @@ function TeacherFormDialog({
           </div>
         </div>
 
-        {teacher && (
-          <InlineConstraints
-            schoolId={schoolId}
-            category="TEACHER"
-            targetId={teacher.id}
-            targetName={teacher.name}
-          />
-        )}
+        {/* ── הגדרות ── */}
+        <div className="border-t pt-3 space-y-3">
+          <Label className="text-sm font-semibold">הגדרות</Label>
+
+          <div className="flex items-center gap-3">
+            <Label htmlFor="transport-priority" className="text-sm min-w-[120px]">יום מוקדם</Label>
+            <Input
+              id="transport-priority"
+              type="number"
+              min={0}
+              max={100}
+              value={transportPriority}
+              onChange={(e) => setTransportPriority(e.target.value)}
+              placeholder="ללא"
+              className="w-20"
+            />
+            {transportPriority !== "" && (
+              <span className="text-xs text-muted-foreground">ניקוד {transportPriority}</span>
+            )}
+          </div>
+          <p className="text-[10px] text-muted-foreground -mt-2 mr-[132px]">
+            הסולבר ינסה לסדר שהמורה תסיים מוקדם בלפחות חצי מימי העבודה שלה. ככל שהניקוד גבוה יותר, כך הסולבר יתאמץ יותר לקיים זאת.
+          </p>
+
+          <div className="flex items-center gap-3">
+            <Label className="text-sm min-w-[120px]">מגבלת סיום יום</Label>
+            <Input
+              type="number" min={1} max={5}
+              value={dayEndNumDays}
+              onChange={(e) => setDayEndNumDays(e.target.value)}
+              placeholder="ללא"
+              className="w-16"
+            />
+            <span className="text-xs text-muted-foreground">ימים לסיים עד שעה</span>
+            <Input
+              type="number" min={1} max={10}
+              value={dayEndPeriod}
+              onChange={(e) => setDayEndPeriod(e.target.value)}
+              placeholder=""
+              className="w-16"
+              disabled={dayEndNumDays === ""}
+            />
+          </div>
+          {dayEndNumDays !== "" && dayEndPeriod !== "" && (
+            <p className="text-[10px] text-muted-foreground -mt-2 mr-[132px]">
+              חובה: ב-{dayEndNumDays} ימים לפחות, למורה לא יהיו שיעורים או ישיבות אחרי שעה {dayEndPeriod}. שאר הימים ללא הגבלה.
+            </p>
+          )}
+        </div>
 
         <DialogFooter>
           <Button type="submit" disabled={loading}>
@@ -600,7 +652,44 @@ export default function TeachersPage() {
     enabled: !!schoolId,
   });
 
+  const { data: allConstraints = [] } = useQuery({
+    queryKey: ["constraints", schoolId],
+    queryFn: () => fetchConstraints(schoolId!),
+    enabled: !!schoolId,
+  });
 
+  const { data: meetings = [] } = useQuery({
+    queryKey: ["meetings", schoolId],
+    queryFn: () => fetchMeetings(schoolId!),
+    enabled: !!schoolId,
+  });
+
+  // Lookup: teacher_id → list of meeting names
+  const meetingsByTeacher = useMemo(() => {
+    const m: Record<number, string[]> = {};
+    for (const mtg of meetings) {
+      if (!mtg.is_active) continue;
+      for (const tid of mtg.teacher_ids) {
+        if (!m[tid]) m[tid] = [];
+        m[tid].push(mtg.name);
+      }
+    }
+    return m;
+  }, [meetings]);
+
+  // Lookup: teacher_id → TEACHER_DAY_END_LIMIT constraint
+  const dayEndByTeacher = useMemo(() => {
+    const m: Record<number, { num_days: number; end_period: number }> = {};
+    for (const c of allConstraints) {
+      if (c.rule_type === "TEACHER_DAY_END_LIMIT" && c.is_active && c.target_id) {
+        m[c.target_id] = {
+          num_days: c.parameters?.num_days as number,
+          end_period: c.parameters?.end_period as number,
+        };
+      }
+    }
+    return m;
+  }, [allConstraints]);
 
   const deleteMut = useMutation({
     mutationFn: () => deleteTeacher(deleteTarget!.id),
@@ -678,10 +767,7 @@ export default function TeachersPage() {
           { header: "שם", accessor: "name" },
           {
             header: "ש׳ פרונטליות",
-            accessor: (t) =>
-              t.min_hours_per_week
-                ? `${t.min_hours_per_week}–${t.max_hours_per_week}`
-                : String(t.max_hours_per_week),
+            accessor: (t) => String(t.max_hours_per_week),
           },
           {
             header: "שעות משרה",
@@ -741,54 +827,71 @@ export default function TeachersPage() {
                 {t.is_principal && <Badge variant="outline">מנהלת ב״ס</Badge>}
                 {t.is_pedagogical_coordinator && <Badge variant="outline">רכזת פדגוגית</Badge>}
                 {t.is_director && <Badge variant="outline">מנהלת</Badge>}
-                {t.transport_priority != null && t.transport_priority > 0 && (
-                  <Badge variant="outline">יום מוקדם</Badge>
-                )}
               </div>
             ),
           },
           {
-            header: "חסימות",
+            header: "הגדרות",
             accessor: (t) => {
+              const parts: React.ReactNode[] = [];
+
+              // Transport priority (יום מוקדם)
+              if (t.transport_priority != null && t.transport_priority > 0) {
+                parts.push(
+                  <Badge key="tp" variant="secondary" className="text-[10px]" title="יום מוקדם">
+                    יום מוקדם {t.transport_priority}
+                  </Badge>
+                );
+              }
+
+              // Day end limit
+              const de = dayEndByTeacher[t.id];
+              if (de) {
+                parts.push(
+                  <Badge key="de" variant="secondary" className="text-[10px]" title="מגבלת סיום יום">
+                    סיום {de.num_days}×עד ש׳{de.end_period}
+                  </Badge>
+                );
+              }
+
+              // Blocked slots
               const slots = t.blocked_slots ?? [];
-              if (slots.length === 0) {
-                return <span className="text-muted-foreground text-sm">—</span>;
+              if (slots.length > 0) {
+                parts.push(<span key="bl" className="text-[10px] text-muted-foreground">חסימה:</span>);
+                const daySlots: Record<string, number[]> = {};
+                for (const s of slots) {
+                  if (!daySlots[s.day]) daySlots[s.day] = [];
+                  daySlots[s.day].push(s.period);
+                }
+                for (const day of DAY_ORDER) {
+                  if (!daySlots[day]) continue;
+                  const periods = daySlots[day].sort((a, b) => a - b);
+                  const maxPeriods = periodsPerDay[day] ?? school?.periods_per_day ?? 8;
+                  const isFullDay = periods.length >= maxPeriods;
+                  parts.push(
+                    <Badge
+                      key={`b-${day}`}
+                      variant={isFullDay ? "destructive" : "outline"}
+                      className="text-[10px] px-1.5 py-0"
+                      title={isFullDay
+                        ? `${DAY_LABELS[day]} — יום חסום`
+                        : `${DAY_LABELS[day]} — שעות ${periods.join(",")}`
+                      }
+                    >
+                      {DAY_LABELS[day]}
+                      {!isFullDay && (
+                        <span className="text-muted-foreground mr-0.5">
+                          ({periods.length})
+                        </span>
+                      )}
+                    </Badge>
+                  );
+                }
               }
 
-              // Group blocked slots by day
-              const daySlots: Record<string, number[]> = {};
-              for (const s of slots) {
-                if (!daySlots[s.day]) daySlots[s.day] = [];
-                daySlots[s.day].push(s.period);
-              }
-
-              return (
-                <div className="flex flex-wrap gap-1 items-center">
-                  {DAY_ORDER.filter((d) => daySlots[d]).map((day) => {
-                    const periods = daySlots[day].sort((a, b) => a - b);
-                    const maxPeriods = periodsPerDay[day] ?? school?.periods_per_day ?? 8;
-                    const isFullDay = periods.length >= maxPeriods;
-                    return (
-                      <Badge
-                        key={day}
-                        variant={isFullDay ? "destructive" : "outline"}
-                        className="text-[10px] px-1.5 py-0"
-                        title={isFullDay
-                          ? `${DAY_LABELS[day]} — יום חסום`
-                          : `${DAY_LABELS[day]} — שעות ${periods.join(",")}`
-                        }
-                      >
-                        {DAY_LABELS[day]}
-                        {!isFullDay && (
-                          <span className="text-muted-foreground mr-0.5">
-                            ({periods.length})
-                          </span>
-                        )}
-                      </Badge>
-                    );
-                  })}
-                </div>
-              );
+              return parts.length > 0
+                ? <div className="flex flex-wrap gap-1 items-center">{parts}</div>
+                : <span className="text-muted-foreground text-sm">—</span>;
             },
           },
           {
@@ -814,43 +917,18 @@ export default function TeachersPage() {
             ),
           },
           {
-            header: "יום מוקדם",
+            header: "ישיבות",
             accessor: (t) => {
-              const val = t.transport_priority;
+              const names = meetingsByTeacher[t.id];
+              if (!names || names.length === 0) return <span className="text-muted-foreground text-sm">—</span>;
               return (
-                <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                  {val != null && val > 0 ? (
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      className="w-12 rounded border bg-background px-1 py-0.5 text-sm text-center"
-                      value={val}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        updateTeacher(t.id, {
-                          transport_priority: v !== "" && Number(v) > 0 ? Number(v) : null,
-                        }).then(() =>
-                          qc.invalidateQueries({ queryKey: ["teachers", schoolId] }),
-                        );
-                      }}
-                    />
-                  ) : (
-                    <button
-                      className="text-xs text-primary hover:underline cursor-pointer"
-                      onClick={() => {
-                        updateTeacher(t.id, { transport_priority: 70 }).then(() =>
-                          qc.invalidateQueries({ queryKey: ["teachers", schoolId] }),
-                        );
-                      }}
-                    >
-                      + הוסף
-                    </button>
-                  )}
+                <div className="flex flex-wrap gap-1">
+                  {names.map((n, i) => (
+                    <Badge key={i} variant="outline" className="text-[10px] px-1.5 py-0">{n}</Badge>
+                  ))}
                 </div>
               );
             },
-            className: "w-20",
           },
           {
             header: "פעולות",
@@ -906,6 +984,21 @@ export default function TeachersPage() {
           schoolId={schoolId}
         />
       )}
+
+      {/* ── כללים אוטומטיים הקשורים למורים ── */}
+      <div className="border rounded-lg p-4 bg-muted/20 space-y-2">
+        <h3 className="text-sm font-semibold text-muted-foreground">כללים אוטומטיים (תמיד פעילים)</h3>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-[11px] text-muted-foreground">
+          <p><strong>ישיבות רק בימי הוראה</strong> — מורה חייבת ללמד ביום שיש לה ישיבה. צוות ניהולי ויועצות פטורים.</p>
+          <p><strong>יום חופשי להנהלה</strong> — חבר צוות ניהולי מקבל לפחות יום חופשי אחד בשבוע (כולל ימי ישיבה).</p>
+          <p><strong>מגבלת סיום מאוחר</strong> — מחנכת: עד 2 ימים בשעה 8 + יום קצר חובה. מורה רגילה: עד 3 ימים בשעה 8.</p>
+          <p><strong>מקס 6 שעות רצופות</strong> — לא יותר מ-6 שעות הוראה רצופות ביום.</p>
+          <p><strong>מקס 4 ישיבות רצופות</strong> — לא יותר מ-4 שעות ישיבה רצופות בלי שיעור פרונטלי ביניהן.</p>
+          <p><strong>ימי עבודה לפי עוז לתמורה</strong> — rubrica &lt;20→2 ימים, 20-27→3, &gt;27→4. ניתן לדרוס ידנית.</p>
+          <p><strong>מגבלת חלונות שבועית</strong> — מספר חלונות מותר בשבוע מחושב אוטומטית לפי שעות פרונטליות.</p>
+          <p><strong>צמצום חלונות</strong> — הסולבר מנסה למזער חלונות (רך, ניקוד 60).</p>
+        </div>
+      </div>
 
       <ConfirmDialog
         open={!!deleteTarget}

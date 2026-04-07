@@ -158,9 +158,9 @@ const GLOBAL_PRINCIPLES: BrainPrinciple[] = [
     id: "meetings-on-teaching-days",
     name: "ישיבות רק בימי הוראה",
     description:
-      "ישיבת מורים מתוזמנת רק ביום שבו כל המורים המשתתפים מלמדים.",
+      "ישיבת מורים מתוזמנת רק ביום שבו כל המורים המשתתפים מלמדים. צוות ניהולי ויועצות פטורים. פירוט נוסף בדף מורים.",
     category: "system",
-    details: ["אילוץ קשה (HARD)", "חל על כל הישיבות עם נוכחות חובה"],
+    details: ["אילוץ קשה (HARD)"],
     isHard: true,
   },
   // ── Solver intelligence (soft auto-rules) ──

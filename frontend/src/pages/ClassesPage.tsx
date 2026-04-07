@@ -6,6 +6,7 @@ import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import { fetchGrades, createGrade, updateGrade, deleteGrade } from "@/api/grades";
 import { fetchClasses, createClass, updateClass, deleteClass } from "@/api/classes";
+import { fetchTeachers } from "@/api/teachers";
 import { fetchRequirements } from "@/api/subjects";
 import { fetchGroupingClusters } from "@/api/groupings";
 import { fetchConstraints, createConstraint, updateConstraint, deleteConstraint } from "@/api/constraints";
@@ -18,7 +19,7 @@ import { Select } from "@/components/common/Select";
 import { Label } from "@/components/common/Label";
 import { Badge } from "@/components/common/Badge";
 import { DAY_LABELS_SHORT, DAYS_ORDER } from "@/lib/constraints";
-import type { Grade, ClassGroup, Constraint } from "@/types/models";
+import type { Grade, ClassGroup, Constraint, HomeroomConfig, Teacher } from "@/types/models";
 
 const MAX_PERIOD = 10;
 const SCHOOL_DAYS = DAYS_ORDER.slice(0, 6); // Sun-Fri
@@ -193,31 +194,106 @@ function GradeFormDialog({ open, onClose, grade, schoolId }: { open: boolean; on
   );
 }
 
+const DEFAULT_HOMEROOM_CONFIG: HomeroomConfig = {
+  meet_hard_count: 4,
+  meet_soft_weight: 80,
+  open_sunday: true,
+  open_sunday_type: "HARD",
+  open_sunday_weight: 90,
+  open_other: true,
+  open_other_weight: 60,
+};
+
+// ─── Constraint row: checkbox + type toggle + weight slider ──────────
+function ConstraintRow({
+  label, enabled, onToggle, type, onTypeChange, weight, onWeightChange, softOnly,
+}: {
+  label: string; enabled: boolean; onToggle: (v: boolean) => void;
+  type: "HARD" | "SOFT"; onTypeChange: (v: "HARD" | "SOFT") => void;
+  weight: number; onWeightChange: (v: number) => void;
+  softOnly?: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-3 py-1.5">
+      <label className="flex items-center gap-1.5 cursor-pointer min-w-[140px]">
+        <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)} className="rounded border-border" />
+        <span className="text-sm">{label}</span>
+      </label>
+      {enabled && (
+        <>
+          {!softOnly ? (
+            <button
+              type="button"
+              onClick={() => onTypeChange(type === "HARD" ? "SOFT" : "HARD")}
+              className="cursor-pointer"
+            >
+              <Badge variant={type === "HARD" ? "default" : "outline"} className="text-[10px]">
+                {type === "HARD" ? "חובה" : "רך"}
+              </Badge>
+            </button>
+          ) : (
+            <Badge variant="outline" className="text-[10px]">רך</Badge>
+          )}
+          {(type === "SOFT" || softOnly) && (
+            <div className="flex items-center gap-1">
+              <input type="range" min={10} max={100} step={5} value={weight} onChange={(e) => onWeightChange(Number(e.target.value))} className="w-16 h-1" />
+              <span className="text-[10px] text-muted-foreground w-6">{weight}</span>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Class Form (with End-of-Day grid inside) ────────────
 function ClassFormDialog({
-  open, onClose, classGroup, grades, schoolId, eodConstraint, gradeEodConstraint,
+  open, onClose, classGroup, grades, schoolId, eodConstraint, gradeEodConstraint, homeroomTeacher,
 }: {
   open: boolean; onClose: () => void; classGroup: ClassGroup | null; grades: Grade[]; schoolId: number;
   eodConstraint: Constraint | undefined;
   gradeEodConstraint: Constraint | undefined;
+  homeroomTeacher: Teacher | undefined;
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState(classGroup?.name ?? "");
   const [gradeId, setGradeId] = useState(classGroup?.grade_id ?? (grades[0]?.id ?? 0));
-  const [homeroomDailyRequired, setHomeroomDailyRequired] = useState(classGroup?.homeroom_daily_required ?? false);
+  const [hrCfg, setHrCfg] = useState<HomeroomConfig>(
+    classGroup?.homeroom_config ?? DEFAULT_HOMEROOM_CONFIG,
+  );
   const [eodGrid, setEodGrid] = useState<Record<string, number[]>>({});
 
   useEffect(() => {
     if (open) setEodGrid(constraintToGrid(eodConstraint));
   }, [open, eodConstraint]);
 
+  // Compute teacher's effective work days (same logic as solver brain.py)
+  const teacherWorkDays = useMemo(() => {
+    if (!homeroomTeacher) return null;
+    const t = homeroomTeacher;
+    let max: number;
+    if (t.max_work_days != null) {
+      max = t.max_work_days;
+    } else if (t.rubrica_hours != null && t.rubrica_hours > 0) {
+      if (t.rubrica_hours > 27) max = 4;
+      else if (t.rubrica_hours >= 20) max = 3;
+      else max = 2;
+    } else {
+      max = 5;
+    }
+    return { max, min: t.min_work_days, name: t.name };
+  }, [homeroomTeacher]);
+
+  const updateCfg = <K extends keyof HomeroomConfig>(key: K, value: HomeroomConfig[K]) =>
+    setHrCfg((prev) => ({ ...prev, [key]: value }));
+
   const saveMut = useMutation({
     mutationFn: async () => {
       let classId = classGroup?.id;
       if (classGroup) {
-        await updateClass(classGroup.id, { name, grade_id: gradeId, homeroom_daily_required: homeroomDailyRequired });
+        await updateClass(classGroup.id, { name, grade_id: gradeId, homeroom_config: hrCfg });
       } else {
-        const created = await createClass({ school_id: schoolId, name, grade_id: gradeId, homeroom_daily_required: homeroomDailyRequired });
+        const created = await createClass({ school_id: schoolId, name, grade_id: gradeId, homeroom_config: hrCfg });
         classId = created.id;
       }
       // Save end-of-day constraint
@@ -261,10 +337,65 @@ function ClassFormDialog({
           </div>
         </div>
 
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" checked={homeroomDailyRequired} onChange={(e) => setHomeroomDailyRequired(e.target.checked)} className="rounded border-border" />
-          <span className="text-sm">מחנכת חייבת לפגוש כיתה כל יום</span>
-        </label>
+        {/* ── Homeroom config ── */}
+        <div className="border-t pt-3 space-y-2">
+          <Label className="text-sm font-semibold">אילוצי מחנכת</Label>
+
+          {/* Meet days: hard count + soft remainder */}
+          <div className="space-y-1.5">
+            {teacherWorkDays && (
+              <p className="text-[10px] text-muted-foreground">
+                מחנכת: {teacherWorkDays.name} · עד {teacherWorkDays.max} ימי הוראה
+              </p>
+            )}
+            <div className="flex items-center gap-3">
+              <span className="text-sm min-w-[80px]">ימי מפגש</span>
+              <input
+                type="number" min={0} max={teacherWorkDays?.max ?? 5} value={hrCfg.meet_hard_count}
+                onChange={(e) => updateCfg("meet_hard_count", Number(e.target.value))}
+                className="w-12 h-7 text-center text-sm border rounded"
+              />
+              <Badge variant="default" className="text-[10px]">חובה</Badge>
+              {teacherWorkDays && hrCfg.meet_hard_count < teacherWorkDays.max && (
+                <>
+                  <span className="text-xs text-muted-foreground">
+                    השאר ({teacherWorkDays.max - hrCfg.meet_hard_count}) רך
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <input type="range" min={10} max={100} step={5} value={hrCfg.meet_soft_weight} onChange={(e) => updateCfg("meet_soft_weight", Number(e.target.value))} className="w-16 h-1" />
+                    <span className="text-[10px] text-muted-foreground w-6">{hrCfg.meet_soft_weight}</span>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Sunday opening */}
+          <ConstraintRow
+            label="פתיחת בוקר ראשון"
+            enabled={hrCfg.open_sunday}
+            onToggle={(v) => updateCfg("open_sunday", v)}
+            type={hrCfg.open_sunday_type}
+            onTypeChange={(v) => updateCfg("open_sunday_type", v)}
+            weight={hrCfg.open_sunday_weight}
+            onWeightChange={(v) => updateCfg("open_sunday_weight", v)}
+          />
+
+          {/* Other days morning */}
+          <ConstraintRow
+            label="פתיחת בוקר שאר ימים"
+            enabled={hrCfg.open_other}
+            onToggle={(v) => updateCfg("open_other", v)}
+            type="SOFT"
+            onTypeChange={() => {}}
+            weight={hrCfg.open_other_weight}
+            onWeightChange={(v) => updateCfg("open_other_weight", v)}
+            softOnly
+          />
+          {hrCfg.open_other && (
+            <p className="text-[10px] text-muted-foreground mr-6">שעות 1-4, ניקוד יורד 25% לכל שעה רחוקה מהבוקר</p>
+          )}
+        </div>
 
         {/* End-of-Day Grid */}
         <div className="border-t pt-3">
@@ -320,6 +451,7 @@ export default function ClassesPage() {
   const { data: allRequirements = [] } = useQuery({ queryKey: ["requirements", schoolId, true], queryFn: () => fetchRequirements(schoolId!, true), enabled: !!schoolId });
   const { data: clusters = [] } = useQuery({ queryKey: ["grouping-clusters", schoolId], queryFn: () => fetchGroupingClusters(schoolId!), enabled: !!schoolId });
   const { data: constraints = [] } = useQuery({ queryKey: ["constraints", schoolId], queryFn: () => fetchConstraints(schoolId!), enabled: !!schoolId });
+  const { data: teachers = [] } = useQuery({ queryKey: ["teachers", schoolId], queryFn: () => fetchTeachers(schoolId!), enabled: !!schoolId });
 
   const classHoursSummary = useMemo(() => computeAllClassHours(allRequirements, clusters), [allRequirements, clusters]);
 
@@ -342,10 +474,6 @@ export default function ClassesPage() {
     return m;
   }, [constraints]);
 
-  const toggleHomeroomMut = useMutation({
-    mutationFn: ({ id, value }: { id: number; value: boolean }) => updateClass(id, { homeroom_daily_required: value }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["classes", schoolId] }),
-  });
 
   const deleteMut = useMutation({
     mutationFn: () => deleteTarget!.type === "grade" ? deleteGrade(deleteTarget!.id) : deleteClass(deleteTarget!.id),
@@ -388,7 +516,8 @@ export default function ClassesPage() {
                     <th className="text-right p-2 font-medium">הקבצות</th>
                     <th className="text-right p-2 font-medium">משותפים</th>
                     <th className="text-right p-2 font-medium">סה״כ</th>
-                    <th className="text-right p-2 font-medium">מחנכת</th>
+                    <th className="text-right p-2 font-medium">מפגש מחנכת</th>
+                    <th className="text-right p-2 font-medium">פתיחת בוקר</th>
                     <th className="text-right p-2 font-medium">סוף יום</th>
                     <th className="text-right p-2 font-medium w-28">פעולות</th>
                   </tr>
@@ -419,9 +548,36 @@ export default function ClassesPage() {
                         <td className="p-2">{s?.shared || "—"}</td>
                         <td className="p-2">{s?.total ? <Badge variant="secondary" className="font-bold">{s.total}</Badge> : "—"}</td>
                         <td className="p-2">
-                          <button type="button" onClick={() => toggleHomeroomMut.mutate({ id: c.id, value: !c.homeroom_daily_required })} className="cursor-pointer">
-                            {c.homeroom_daily_required ? <Badge variant="default" className="text-xs">חובה</Badge> : <Badge variant="outline" className="text-xs">מועדף</Badge>}
-                          </button>
+                          {(() => {
+                            const cfg = c.homeroom_config;
+                            if (!cfg) return <span className="text-muted-foreground text-xs">—</span>;
+                            const hard = cfg.meet_hard_count ?? 0;
+                            const ht = teachers.find((t) => t.homeroom_class_id === c.id);
+                            const teachDays = ht
+                              ? (ht.max_work_days ?? (ht.rubrica_hours != null && ht.rubrica_hours > 0
+                                ? (ht.rubrica_hours > 27 ? 4 : ht.rubrica_hours >= 20 ? 3 : 2)
+                                : 5))
+                              : 5;
+                            const soft = teachDays - hard;
+                            return (
+                              <span className="text-[10px]">
+                                <Badge variant="default" className="text-[10px]">{hard} חובה</Badge>
+                                {soft > 0 && <Badge variant="outline" className="text-[10px] mr-1">{soft} רך {cfg.meet_soft_weight}</Badge>}
+                              </span>
+                            );
+                          })()}
+                        </td>
+                        <td className="p-2">
+                          {(() => {
+                            const cfg = c.homeroom_config;
+                            if (!cfg) return <span className="text-muted-foreground text-xs">—</span>;
+                            const parts: string[] = [];
+                            if (cfg.open_sunday) parts.push(cfg.open_sunday_type === "HARD" ? "א׳ חובה" : `א׳ ${cfg.open_sunday_weight}`);
+                            if (cfg.open_other) parts.push(`שאר ${cfg.open_other_weight}`);
+                            return parts.length > 0
+                              ? <Badge variant="outline" className="text-[10px]">{parts.join(" · ")}</Badge>
+                              : <span className="text-muted-foreground text-xs">—</span>;
+                          })()}
                         </td>
                         <td className="p-2">
                           {eodSummary ? (
@@ -450,7 +606,7 @@ export default function ClassesPage() {
                       </tr>
                     );
                   })}
-                  {gradeClasses.length === 0 && <tr><td colSpan={8} className="p-4 text-center text-muted-foreground">אין כיתות</td></tr>}
+                  {gradeClasses.length === 0 && <tr><td colSpan={9} className="p-4 text-center text-muted-foreground">אין כיתות</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -473,6 +629,7 @@ export default function ClassesPage() {
           classGroup={editingClass} grades={grades} schoolId={schoolId}
           eodConstraint={editingClass ? eodByClass[editingClass.id] : undefined}
           gradeEodConstraint={editingClass ? eodByGrade[editingClass.grade_id] : undefined}
+          homeroomTeacher={editingClass ? teachers.find((t) => t.homeroom_class_id === editingClass.id) : undefined}
         />
       )}
       {eodGrade && (
