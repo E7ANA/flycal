@@ -1,5 +1,4 @@
 import { useState, useMemo, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Pencil, Trash2, Calendar } from "lucide-react";
 import toast from "react-hot-toast";
@@ -29,6 +28,7 @@ import { Label } from "@/components/common/Label";
 import { Badge } from "@/components/common/Badge";
 import type { Teacher, BlockedSlot } from "@/types/models";
 import { getSubjectColor } from "@/lib/subjectColors";
+import { TimetablePreviewDialog } from "@/components/timetable/TimetablePreviewDialog";
 
 import { DAYS_ORDER as DAY_ORDER, DAY_LABELS_SHORT as DAY_LABELS } from "@/lib/constraints";
 
@@ -621,12 +621,12 @@ function TeacherFormDialog({
 export default function TeachersPage() {
   const schoolId = useSchoolStore((s) => s.activeSchoolId);
   const qc = useQueryClient();
-  const navigate = useNavigate();
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Teacher | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Teacher | null>(null);
   const [blocksTarget, setBlocksTarget] = useState<Teacher | null>(null);
+  const [previewTeacher, setPreviewTeacher] = useState<{ id: number; name: string } | null>(null);
 
   const { data: teachers = [] } = useQuery({
     queryKey: ["teachers", schoolId],
@@ -940,7 +940,7 @@ export default function TeachersPage() {
                   title="צפה במערכת"
                   onClick={(e) => {
                     e.stopPropagation();
-                    navigate(`/results?view=teacher&id=${t.id}`);
+                    setPreviewTeacher({ id: t.id, name: t.name });
                   }}
                 >
                   <Calendar className="h-4 w-4 text-primary" />
@@ -1017,6 +1017,15 @@ export default function TeachersPage() {
           saving={saveBlocksMut.isPending}
           days={activeDays}
           periodsPerDay={periodsPerDay}
+        />
+      )}
+      {previewTeacher && (
+        <TimetablePreviewDialog
+          open={!!previewTeacher}
+          onClose={() => setPreviewTeacher(null)}
+          mode="teacher"
+          targetId={previewTeacher.id}
+          targetName={previewTeacher.name}
         />
       )}
     </div>

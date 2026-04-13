@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, ChevronDown, ChevronLeft, Undo2, X, Eye, EyeOff, Lock, LockOpen } from "lucide-react";
+import { Plus, Pencil, Trash2, ChevronDown, ChevronLeft, Undo2, X, Eye, EyeOff, Lock, LockOpen, ClipboardList } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import {
@@ -1440,6 +1440,7 @@ export default function GroupingsPage() {
   const [subjectFormOpen, setSubjectFormOpen] = useState(false);
   const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
   const [deleteSubjectTarget, setDeleteSubjectTarget] = useState<{ id: number; name: string } | null>(null);
+  const [reqPreviewSubject, setReqPreviewSubject] = useState<Subject | null>(null);
 
   // Groupings state
   const [expandedGradeId, setExpandedGradeId] = useState<number | null>(null);
@@ -1875,6 +1876,9 @@ export default function GroupingsPage() {
                         ? <EyeOff className="h-4 w-4 text-orange-400" />
                         : <Eye className="h-4 w-4 text-muted-foreground" />
                       }
+                    </Button>
+                    <Button variant="ghost" size="icon" title="הצג דרישות" onClick={(e) => { e.stopPropagation(); setReqPreviewSubject(s); }}>
+                      <ClipboardList className="h-4 w-4 text-primary" />
                     </Button>
                     <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setEditingSubject(s); setSubjectFormOpen(true); }}>
                       <Pencil className="h-4 w-4" />
@@ -2815,6 +2819,56 @@ export default function GroupingsPage() {
         message={`האם למחוק את "${deleteSubjectTarget?.name}"? פעולה זו לא ניתנת לביטול.`}
         loading={deleteSubjectMut.isPending}
       />
+
+      {reqPreviewSubject && (
+        <Dialog open={!!reqPreviewSubject} onClose={() => setReqPreviewSubject(null)} className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>דרישות — {reqPreviewSubject.name}</DialogTitle>
+          </DialogHeader>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b text-muted-foreground">
+                  <th className="text-right py-1.5 px-2 font-medium">כיתה</th>
+                  <th className="text-right py-1.5 px-2 font-medium">מורה</th>
+                  <th className="text-center py-1.5 px-2 font-medium">שעות</th>
+                  <th className="text-right py-1.5 px-2 font-medium">סוג</th>
+                </tr>
+              </thead>
+              <tbody>
+                {requirements
+                  .filter((r) => r.subject_id === reqPreviewSubject.id)
+                  .sort((a, b) => {
+                    const ca = classMap[a.class_group_id];
+                    const cb = classMap[b.class_group_id];
+                    return (ca?.name ?? "").localeCompare(cb?.name ?? "", "he");
+                  })
+                  .map((r) => {
+                    const cls = classMap[r.class_group_id];
+                    const teacher = r.teacher_id ? teacherMap[r.teacher_id] : null;
+                    const cluster = r.grouping_cluster_id ? clusters.find((c) => c.id === r.grouping_cluster_id) : null;
+                    return (
+                      <tr key={r.id} className="border-b border-muted last:border-0 hover:bg-muted/50">
+                        <td className="py-1.5 px-2">{cls?.name ?? "—"}</td>
+                        <td className="py-1.5 px-2">{teacher ?? <span className="text-muted-foreground">—</span>}</td>
+                        <td className="text-center py-1.5 px-2">{r.hours_per_week}</td>
+                        <td className="py-1.5 px-2 text-xs text-muted-foreground">
+                          {r.is_grouped && cluster ? cluster.name : "רגיל"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                {requirements.filter((r) => r.subject_id === reqPreviewSubject.id).length === 0 && (
+                  <tr><td colSpan={4} className="text-center text-muted-foreground py-4">אין דרישות</td></tr>
+                )}
+              </tbody>
+            </table>
+            <p className="text-xs text-muted-foreground mt-2 px-2">
+              סה״כ: {requirements.filter((r) => r.subject_id === reqPreviewSubject.id).reduce((s, r) => s + r.hours_per_week, 0)} שעות
+            </p>
+          </div>
+        </Dialog>
+      )}
 
       {reqPickerCluster && (
         <RequirementPickerDialog

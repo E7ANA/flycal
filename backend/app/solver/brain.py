@@ -1179,8 +1179,11 @@ def _apply_homeroom_daily_meeting(
     for teacher_id, class_id in data.homeroom_map.items():
         cfg = class_config_map.get(class_id, _DEFAULT_HOMEROOM_CONFIG)
         class_name = class_name_map.get(class_id, str(class_id))
-        meet_hard_count: int = cfg.get("meet_hard_count", 0)
-        if meet_hard_count == 0:
+        raw_hard = cfg.get("meet_hard_count")
+        if raw_hard is not None:
+            meet_hard_count: int = raw_hard
+        else:
+            # Legacy compat
             raw = cfg.get("meet_days_count")
             if raw is not None:
                 meet_hard_count = raw

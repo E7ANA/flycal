@@ -374,19 +374,11 @@ export default function ResultsPage() {
                 })
                   .then((res) => {
                     if (!res.ok) return res.json().then((err) => { throw new Error(err?.detail ?? "Export failed"); });
-                    const matched = res.headers.get("X-Shahaf-Matched") ?? "?";
-                    const unmatched = res.headers.get("X-Shahaf-Unmatched") ?? "0";
-                    toast.success(`ייצוא לשחף: ${matched} שיעורים מופו, ${unmatched} לא מופו`);
-                    return res.blob();
+                    return res.json();
                   })
-                  .then((blob) => {
-                    if (!blob) return;
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = `shahaf_updated_${sol.id}.zip`;
-                    a.click();
-                    URL.revokeObjectURL(url);
+                  .then((data) => {
+                    if (!data) return;
+                    toast.success(`ייצוא לשחף: ${data.matched} שיבוצים, ${data.study_items} שעות הוראה — התיקיה נפתחה`);
                   })
                   .catch((err) => toast.error(`שגיאה בייצוא לשחף: ${err instanceof Error ? err.message : String(err)}`));
               }}

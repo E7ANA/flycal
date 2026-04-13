@@ -1,5 +1,4 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Pencil, Trash2, Calendar, Clock } from "lucide-react";
 import toast from "react-hot-toast";
@@ -19,6 +18,7 @@ import { Select } from "@/components/common/Select";
 import { Label } from "@/components/common/Label";
 import { Badge } from "@/components/common/Badge";
 import { DAY_LABELS_SHORT, DAYS_ORDER } from "@/lib/constraints";
+import { TimetablePreviewDialog } from "@/components/timetable/TimetablePreviewDialog";
 import type { Grade, ClassGroup, Constraint, HomeroomConfig, Teacher } from "@/types/models";
 
 const MAX_PERIOD = 10;
@@ -437,7 +437,6 @@ function ClassFormDialog({
 export default function ClassesPage() {
   const schoolId = useSchoolStore((s) => s.activeSchoolId);
   const qc = useQueryClient();
-  const navigate = useNavigate();
 
   const [gradeDialogOpen, setGradeDialogOpen] = useState(false);
   const [editingGrade, setEditingGrade] = useState<Grade | null>(null);
@@ -445,6 +444,7 @@ export default function ClassesPage() {
   const [editingClass, setEditingClass] = useState<ClassGroup | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ type: "grade" | "class"; id: number; name: string } | null>(null);
   const [eodGrade, setEodGrade] = useState<Grade | null>(null);
+  const [previewClass, setPreviewClass] = useState<{ id: number; name: string } | null>(null);
 
   const { data: grades = [] } = useQuery({ queryKey: ["grades", schoolId], queryFn: () => fetchGrades(schoolId!), enabled: !!schoolId });
   const { data: classes = [] } = useQuery({ queryKey: ["classes", schoolId], queryFn: () => fetchClasses(schoolId!), enabled: !!schoolId });
@@ -592,7 +592,7 @@ export default function ClassesPage() {
                         </td>
                         <td className="p-2">
                           <div className="flex gap-1">
-                            <Button variant="ghost" size="icon" title="מערכת" onClick={() => navigate(`/results?view=class&id=${c.id}`)}>
+                            <Button variant="ghost" size="icon" title="מערכת" onClick={() => setPreviewClass({ id: c.id, name: c.name })}>
                               <Calendar className="h-4 w-4 text-primary" />
                             </Button>
                             <Button variant="ghost" size="icon" onClick={() => { setEditingClass(c); setClassDialogOpen(true); }}>
@@ -640,6 +640,15 @@ export default function ClassesPage() {
       )}
       <ConfirmDialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={() => deleteMut.mutate()}
         title="אישור מחיקה" message={`האם למחוק את "${deleteTarget?.name}"?`} loading={deleteMut.isPending} />
+      {previewClass && (
+        <TimetablePreviewDialog
+          open={!!previewClass}
+          onClose={() => setPreviewClass(null)}
+          mode="class"
+          targetId={previewClass.id}
+          targetName={previewClass.name}
+        />
+      )}
     </div>
   );
 }
