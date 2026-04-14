@@ -27,6 +27,8 @@ class Subject(Base):
     link_group: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # Max combined hours per day for all subjects in the same link_group (per class)
     link_group_max_per_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Max lessons per day for this subject (per class). null = use global default (2)
+    max_per_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
     shahaf_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
 

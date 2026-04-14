@@ -84,6 +84,7 @@ export interface Subject {
   is_hidden: boolean;
   link_group: string | null;
   link_group_max_per_day: number | null;
+  max_per_day: number | null;
 }
 
 export interface PinnedSlot {

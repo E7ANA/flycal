@@ -13,6 +13,7 @@ class SubjectCreate(BaseModel):
     is_hidden: bool = False
     link_group: str | None = None
     link_group_max_per_day: int | None = None
+    max_per_day: int | None = None
     shahaf_id: str | None = None
 
 
@@ -27,6 +28,7 @@ class SubjectUpdate(BaseModel):
     is_hidden: bool | None = None
     link_group: str | None = None
     link_group_max_per_day: int | None = None
+    max_per_day: int | None = None
     shahaf_id: str | None = None
 
 
@@ -43,6 +45,7 @@ class SubjectRead(BaseModel):
     is_hidden: bool = False
     link_group: str | None = None
     link_group_max_per_day: int | None = None
+    max_per_day: int | None = None
     shahaf_id: str | None = None
 
     model_config = {"from_attributes": True}

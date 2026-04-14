@@ -1858,6 +1858,26 @@ export default function GroupingsPage() {
                 className: "w-16 text-center",
               },
               {
+                header: "מקס/יום",
+                accessor: (s: Subject) => (
+                  <button
+                    type="button"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      const current = s.max_per_day;
+                      const next = current === null ? 3 : current >= 3 ? null : current + 1;
+                      await updateSubject(s.id, { max_per_day: next });
+                      qc.invalidateQueries({ queryKey: ["subjects", schoolId] });
+                    }}
+                    className={`cursor-pointer hover:opacity-70 font-bold ${s.max_per_day != null ? "text-blue-600" : "text-muted-foreground"}`}
+                    title={s.max_per_day != null ? `מקסימום ${s.max_per_day} שעות ליום. לחץ לשנות` : "ברירת מחדל (2). לחץ להגדיר 3"}
+                  >
+                    {s.max_per_day != null ? s.max_per_day : "—"}
+                  </button>
+                ),
+                className: "w-16 text-center",
+              },
+              {
                 header: "פעולות",
                 accessor: (s: Subject) => (
                   <div className="flex gap-1">

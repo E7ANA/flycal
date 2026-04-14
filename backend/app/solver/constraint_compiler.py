@@ -550,6 +550,14 @@ def _compile_max_per_day(
     is_hard = constraint.type == ConstraintType.HARD
 
     if constraint.category == "SUBJECT" and target_id:
+        # Per-subject override: if subject has max_per_day set, use it
+        for subj in data.all_subjects:
+            if subj.id == target_id:
+                mpd = getattr(subj, "max_per_day", None)
+                if mpd is not None:
+                    max_val = mpd
+                break
+
         # Skip this subject entirely if ANY requirement or cluster track
         # cannot fit within max_val hours/day given teacher availability.
         # Also skip if consecutive_count > max_val.
