@@ -23,6 +23,11 @@ class TeacherCreate(BaseModel):
     is_principal: bool = False
     is_pedagogical_coordinator: bool = False
     is_director: bool = False
+    pirtani_hours: float | None = None
+    shehiya_hours: float | None = None
+    tafkid_hours: float | None = None
+    bagrut_hours: float | None = None
+    chinuch_hours: float | None = None
     transport_priority: int | None = None
     blocked_slots: list[BlockedSlot] = []
 
@@ -43,6 +48,11 @@ class TeacherUpdate(BaseModel):
     is_principal: bool | None = None
     is_pedagogical_coordinator: bool | None = None
     is_director: bool | None = None
+    pirtani_hours: float | None = None
+    shehiya_hours: float | None = None
+    tafkid_hours: float | None = None
+    bagrut_hours: float | None = None
+    chinuch_hours: float | None = None
     transport_priority: int | None = None
     blocked_slots: list[BlockedSlot] | None = None
 
@@ -65,6 +75,11 @@ class TeacherRead(BaseModel):
     is_principal: bool
     is_pedagogical_coordinator: bool
     is_director: bool
+    pirtani_hours: float | None = None
+    shehiya_hours: float | None = None
+    tafkid_hours: float | None = None
+    bagrut_hours: float | None = None
+    chinuch_hours: float | None = None
     transport_priority: int | None = None
     blocked_slots: list[BlockedSlot] = []
 

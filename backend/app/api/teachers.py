@@ -28,6 +28,11 @@ def _teacher_to_read(teacher: Teacher) -> TeacherRead:
         is_principal=teacher.is_principal,
         is_pedagogical_coordinator=teacher.is_pedagogical_coordinator,
         is_director=teacher.is_director,
+        pirtani_hours=teacher.pirtani_hours,
+        shehiya_hours=teacher.shehiya_hours,
+        tafkid_hours=teacher.tafkid_hours,
+        bagrut_hours=teacher.bagrut_hours,
+        chinuch_hours=teacher.chinuch_hours,
         transport_priority=teacher.transport_priority,
         blocked_slots=teacher.blocked_slots or [],
     )

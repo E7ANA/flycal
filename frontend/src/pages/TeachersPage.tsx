@@ -775,7 +775,32 @@ export default function TeachersPage() {
               t.rubrica_hours != null
                 ? String(t.rubrica_hours)
                 : "—",
-            className: "w-20",
+            className: "w-16",
+          },
+          {
+            header: "פרטני",
+            accessor: (t) => t.pirtani_hours != null ? String(t.pirtani_hours) : "",
+            className: "w-14 text-center",
+          },
+          {
+            header: "שהייה",
+            accessor: (t) => t.shehiya_hours != null ? String(t.shehiya_hours) : "",
+            className: "w-14 text-center",
+          },
+          {
+            header: "תפקיד",
+            accessor: (t) => t.tafkid_hours != null ? String(t.tafkid_hours) : "",
+            className: "w-14 text-center",
+          },
+          {
+            header: "בגרות",
+            accessor: (t) => t.bagrut_hours != null ? String(t.bagrut_hours) : "",
+            className: "w-14 text-center",
+          },
+          {
+            header: "חינוך",
+            accessor: (t) => t.chinuch_hours != null ? String(t.chinuch_hours) : "",
+            className: "w-14 text-center",
           },
           {
             header: "ימי עבודה",

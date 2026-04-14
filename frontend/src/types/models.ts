@@ -61,6 +61,11 @@ export interface Teacher {
   is_principal: boolean;
   is_pedagogical_coordinator: boolean;
   is_director: boolean;
+  pirtani_hours: number | null;
+  shehiya_hours: number | null;
+  tafkid_hours: number | null;
+  bagrut_hours: number | null;
+  chinuch_hours: number | null;
   transport_priority: number | null;
   blocked_slots: BlockedSlot[];
 }

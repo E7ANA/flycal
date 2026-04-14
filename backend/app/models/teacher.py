@@ -36,6 +36,13 @@ class Teacher(Base):
     is_pedagogical_coordinator: Mapped[bool] = mapped_column(Boolean, default=False)
     is_director: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Shahaf hour breakdown (informational, not used by solver)
+    pirtani_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shehiya_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tafkid_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bagrut_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    chinuch_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     # Transport: prefer early finish (0/null = off, higher = stronger preference)
     transport_priority: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
 

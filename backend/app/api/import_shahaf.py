@@ -144,6 +144,11 @@ async def preview_shahaf_backup(
     teacher_total_hours: dict[str, int] = defaultdict(int)
     teacher_frontal_hours: dict[str, int] = defaultdict(int)
     teacher_meeting_hours: dict[str, int] = defaultdict(int)
+    teacher_pirtani_hours: dict[str, float] = defaultdict(float)
+    teacher_shehiya_hours: dict[str, float] = defaultdict(float)
+    teacher_tafkid_hours: dict[str, float] = defaultdict(float)
+    teacher_bagrut_hours: dict[str, float] = defaultdict(float)
+    teacher_chinuch_hours: dict[str, float] = defaultdict(float)
     teacher_subject_set: dict[str, set] = defaultdict(set)
     teacher_class_set: dict[str, set] = defaultdict(set)
 
@@ -170,6 +175,19 @@ async def preview_shahaf_backup(
             teacher_meeting_hours[tid] += hours
         else:
             teacher_frontal_hours[tid] += hours
+
+        # Classify hour types for Shahaf breakdown
+        sn_lower = subj_name.lower() if subj_name else ""
+        if "פרטני" in subj_name:
+            teacher_pirtani_hours[tid] += hours
+        elif "שהייה" in subj_name:
+            teacher_shehiya_hours[tid] += hours
+        elif any(k in subj_name for k in ["ריכוז", "ניהול", "ייעוץ", "רכזת", "תפקיד"]):
+            teacher_tafkid_hours[tid] += hours
+        elif "בגרות" in subj_name:
+            teacher_bagrut_hours[tid] += hours
+        elif subj_name == "חינוך" or subj_name == "*חינוך":
+            teacher_chinuch_hours[tid] += hours
 
     # Detect roles from study items and teacher fields
     def _detect_roles(tid: str, class_mgr: str | None, tafkidim: int, subj_set: set) -> list[str]:
@@ -226,6 +244,11 @@ async def preview_shahaf_backup(
                 "total_hours": teacher_total_hours.get(tid, 0),
                 "frontal_hours": teacher_frontal_hours.get(tid, 0),
                 "meeting_hours": teacher_meeting_hours.get(tid, 0),
+                "pirtani_hours": teacher_pirtani_hours.get(tid, 0) or None,
+                "shehiya_hours": teacher_shehiya_hours.get(tid, 0) or None,
+                "tafkid_hours": teacher_tafkid_hours.get(tid, 0) or None,
+                "bagrut_hours": teacher_bagrut_hours.get(tid, 0) or None,
+                "chinuch_hours": teacher_chinuch_hours.get(tid, 0) or None,
                 "homeroom_class_id": class_mgr if class_mgr else None,
                 "homeroom_class_name": class_names.get(class_mgr, "") if class_mgr else None,
                 "roles": roles,
@@ -559,6 +582,11 @@ def _do_import(data: ImportRequest, db: Session):
             existing.is_coordinator = "רכזת" in roles_str or "רכז" in roles_str
             existing.is_management = "הנהלה" in roles_str
             existing.is_counselor = "יועצת" in roles_str or "יועץ" in roles_str
+            existing.pirtani_hours = t.get("pirtani_hours")
+            existing.shehiya_hours = t.get("shehiya_hours")
+            existing.tafkid_hours = t.get("tafkid_hours")
+            existing.bagrut_hours = t.get("bagrut_hours")
+            existing.chinuch_hours = t.get("chinuch_hours")
             shahaf_teacher_to_our[t["shahaf_id"]] = existing.id
         else:
             teacher = Teacher(
@@ -571,6 +599,11 @@ def _do_import(data: ImportRequest, db: Session):
                 is_coordinator="רכזת" in roles_str or "רכז" in roles_str,
                 is_management="הנהלה" in roles_str,
                 is_counselor="יועצת" in roles_str or "יועץ" in roles_str,
+                pirtani_hours=t.get("pirtani_hours"),
+                shehiya_hours=t.get("shehiya_hours"),
+                tafkid_hours=t.get("tafkid_hours"),
+                bagrut_hours=t.get("bagrut_hours"),
+                chinuch_hours=t.get("chinuch_hours"),
             )
             db.add(teacher)
             db.flush()
