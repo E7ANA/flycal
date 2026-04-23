@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>logiclass — Promo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #F9F8F6;
+      --primary: #1B365D;
+      --fg: #0D0D0D;
+      --muted: #6B6560;
+      --success-bg: #E8F1E4;
+      --success-fg: #3D5A2E;
+      --purple-bg: #EDE5F5;
+      --purple-fg: #5B3A8C;
+      --coral-bg: #FDE8E4;
+      --coral-fg: #8B3A2F;
+      --teal-bg: #E8F0ED;
+      --teal-fg: #2D5E4F;
+      --warning-bg: #FBF0E0;
+      --warning-fg: #6B4423;
+      --error-bg: #FAE0E4;
+      --error-fg: #9B2C3B;
+      --blue-bg: #DEEAF6;
+      --blue-fg: #2C5F9B;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Montserrat", system-ui, sans-serif;
+      background: #000;
+      color: var(--fg);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    /* 9:16 stage — WhatsApp status / Instagram story format */
+    .stage {
+      width: 1080px;
+      height: 1920px;
+      max-width: 100vw;
+      max-height: 100vh;
+      aspect-ratio: 9/16;
+      background: var(--bg);
+      position: relative;
+      overflow: hidden;
+      transform-origin: center;
+      /* scale down to fit viewport for preview */
+      transform: scale(var(--scale, 0.4));
+    }
+
+    /* Scene transitions */
+    .scene {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      opacity: 0;
+      padding: 80px;
+      transition: opacity 0.6s;
+    }
+    .scene.active { opacity: 1; }
+
+    /* ── Scene 1: Logo intro ── */
+    #scene1 .logo-big {
+      width: 320px; height: 320px;
+      background: var(--primary);
+      border-radius: 64px;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 40px 80px rgba(27,54,93,0.3);
+      animation: scaleIn 0.8s ease-out;
+    }
+    #scene1 .logo-big svg { width: 200px; height: 200px; }
+    #scene1 .brand {
+      font-size: 120px; font-weight: 900;
+      color: var(--fg); letter-spacing: -4px;
+      margin-top: 60px;
+      animation: slideUp 0.8s ease-out 0.3s both;
+    }
+    #scene1 .tagline {
+      font-size: 40px; color: var(--muted);
+      margin-top: 24px;
+      animation: slideUp 0.8s ease-out 0.5s both;
+    }
+
+    /* ── Scene 2: Problem ── */
+    #scene2 .icon-big { font-size: 200px; animation: shake 1s ease-in-out infinite; }
+    #scene2 .headline {
+      font-size: 80px; font-weight: 800;
+      text-align: center; margin-top: 40px;
+      line-height: 1.1;
+    }
+    #scene2 .sub {
+      font-size: 48px; color: var(--muted);
+      margin-top: 32px; text-align: center;
+    }
+    #scene2 .cross { color: #c4342d; font-weight: 900; }
+
+    /* ── Scene 3: Solution — AI building schedule ── */
+    #scene3 .title {
+      font-size: 64px; font-weight: 800; color: var(--primary);
+      margin-bottom: 40px; text-align: center;
+    }
+    #scene3 .grid-demo {
+      background: #fff;
+      border-radius: 32px;
+      padding: 32px;
+      box-shadow: 0 40px 80px rgba(0,0,0,0.1);
+      width: 880px;
+    }
+    .demo-header {
+      background: var(--primary); color: #fff;
+      padding: 24px 32px;
+      border-radius: 20px 20px 0 0;
+      margin: -32px -32px 24px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .demo-header-title { font-size: 28px; font-weight: 700; }
+    .demo-header-phase { font-size: 18px; opacity: 0.8; margin-top: 4px; }
+    .demo-score { font-size: 64px; font-weight: 900; }
+    .demo-score-label { font-size: 18px; opacity: 0.8; text-align: center; }
+
+    .grid-table {
+      display: grid;
+      grid-template-columns: 40px repeat(5, 1fr);
+      gap: 6px;
+    }
+    .grid-cell-header { font-size: 24px; font-weight: 700; color: var(--muted); text-align: center; padding: 8px; }
+    .grid-cell-num { font-size: 18px; color: var(--muted); display: flex; align-items: center; justify-content: center; }
+    .grid-cell {
+      height: 60px;
+      border: 2px dashed #E8E6E3;
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; font-weight: 600;
+      background: rgba(240, 239, 237, 0.3);
+      position: relative;
+    }
+    .grid-cell.filled { border-style: solid; animation: popIn 0.4s ease-out; }
+    .cell-success { background: var(--success-bg); color: var(--success-fg); border-color: #BCD8B0; }
+    .cell-purple { background: var(--purple-bg); color: var(--purple-fg); border-color: #C9B3E0; }
+    .cell-coral { background: var(--coral-bg); color: var(--coral-fg); border-color: #F0B8AD; }
+    .cell-teal { background: var(--teal-bg); color: var(--teal-fg); border-color: #B5D5C8; }
+    .cell-warning { background: var(--warning-bg); color: var(--warning-fg); border-color: #E8D0A8; }
+    .cell-error { background: var(--error-bg); color: var(--error-fg); border-color: #E8A8B4; }
+    .cell-blue { background: var(--blue-bg); color: var(--blue-fg); border-color: #A8C8E8; }
+
+    /* ── Scene 4: Constraints floating in ── */
+    #scene4 .title {
+      font-size: 64px; font-weight: 800; color: var(--primary);
+      margin-bottom: 48px; text-align: center;
+    }
+    #scene4 .chip {
+      display: inline-block;
+      background: #fff;
+      border: 2px solid #E8E6E3;
+      padding: 20px 36px;
+      border-radius: 999px;
+      font-size: 32px; font-weight: 600;
+      margin: 12px;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+      opacity: 0;
+      transform: scale(0.7);
+    }
+    #scene4 .chip.show { animation: chipIn 0.5s ease-out forwards; }
+    #scene4 .chips-wrap { max-width: 920px; text-align: center; }
+
+    /* ── Scene 5: Stats / result ── */
+    #scene5 .big-num {
+      font-size: 240px; font-weight: 900; color: var(--primary);
+      line-height: 1;
+      animation: countUp 0.8s ease-out;
+    }
+    #scene5 .big-label {
+      font-size: 48px; font-weight: 700;
+      margin-top: 24px; text-align: center;
+    }
+    #scene5 .sub {
+      font-size: 36px; color: var(--muted);
+      margin-top: 24px; text-align: center;
+    }
+    #scene5 .stat-row {
+      display: flex; gap: 40px;
+      margin-top: 64px;
+    }
+    #scene5 .stat-item {
+      text-align: center;
+    }
+    #scene5 .stat-v { font-size: 80px; font-weight: 800; color: var(--primary); }
+    #scene5 .stat-l { font-size: 28px; color: var(--muted); margin-top: 8px; }
+
+    /* ── Scene 6: CTA ── */
+    #scene6 .logo-small {
+      width: 140px; height: 140px;
+      background: var(--primary);
+      border-radius: 32px;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 40px;
+    }
+    #scene6 .logo-small svg { width: 90px; height: 90px; }
+    #scene6 .cta-headline {
+      font-size: 96px; font-weight: 900;
+      text-align: center; line-height: 1.05;
+      letter-spacing: -3px;
+    }
+    #scene6 .cta-headline .accent { color: var(--primary); }
+    #scene6 .cta-sub {
+      font-size: 40px; color: var(--muted);
+      margin-top: 40px; text-align: center;
+    }
+    #scene6 .cta-url {
+      font-size: 56px; font-weight: 800; color: var(--primary);
+      margin-top: 64px;
+      padding: 32px 64px;
+      background: #fff;
+      border-radius: 24px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+    }
+
+    /* ── Audio toggle ── */
+    .audio-control {
+      position: fixed;
+      bottom: 24px; left: 24px;
+      background: rgba(0,0,0,0.8);
+      color: #fff;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 999px;
+      font-size: 14px;
+      cursor: pointer;
+      z-index: 100;
+      font-family: inherit;
+    }
+
+    /* ── Control bar ── */
+    .controls {
+      position: fixed;
+      top: 24px; left: 24px;
+      z-index: 100;
+      display: flex; gap: 12px;
+    }
+    .controls button {
+      background: rgba(0,0,0,0.8); color: #fff;
+      border: none; padding: 12px 20px;
+      border-radius: 8px; font-size: 14px;
+      cursor: pointer; font-family: inherit;
+    }
+    .controls button:hover { background: rgba(0,0,0,0.9); }
+
+    .hint {
+      position: fixed;
+      bottom: 24px; right: 24px;
+      background: rgba(0,0,0,0.8);
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      z-index: 100;
+      max-width: 240px;
+    }
+
+    /* ── Animations ── */
+    @keyframes scaleIn { 0% { transform: scale(0.5); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+    @keyframes slideUp { 0% { transform: translateY(30px); opacity: 0; } 100% { transform: translateY(0); opacity: 1; } }
+    @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-10px); } 75% { transform: translateX(10px); } }
+    @keyframes popIn { 0% { transform: scale(0.3); opacity: 0; } 70% { transform: scale(1.08); } 100% { transform: scale(1); opacity: 1; } }
+    @keyframes chipIn { 0% { transform: scale(0.7); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+    @keyframes countUp { 0% { transform: scale(0.8); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+
+    /* Progress bar (timeline) */
+    .timeline-bar {
+      position: absolute; top: 20px; left: 40px; right: 40px;
+      height: 6px; background: rgba(0,0,0,0.1); border-radius: 3px;
+      z-index: 10;
+    }
+    .timeline-progress {
+      height: 100%; background: var(--primary);
+      border-radius: 3px; width: 0%;
+      transition: width 0.1s linear;
+    }
+  </style>
+</head>
+<body>
+  <div class="controls">
+    <button onclick="startPromo()">▶ התחל</button>
+    <button onclick="location.reload()">↻ איפוס</button>
+  </div>
+  <button class="audio-control" id="audioBtn" onclick="toggleAudio()">🔇 הפעל צליל</button>
+  <div class="hint">
+    להקלטה: QuickTime → File → New Screen Recording<br/>
+    או: גרור את החלון הזה לווטסאפ אחרי הקלטה
+  </div>
+
+  <div class="stage">
+    <div class="timeline-bar"><div class="timeline-progress" id="timelineProgress"></div></div>
+
+    <!-- Scene 1: Logo intro -->
+    <div class="scene" id="scene1">
+      <div class="logo-big">
+        <svg viewBox="0 0 100 100" fill="none" stroke="white" stroke-width="5" stroke-linecap="round">
+          <line x1="22" y1="28" x2="78" y2="28"/>
+          <line x1="22" y1="50" x2="78" y2="50"/>
+          <line x1="22" y1="72" x2="78" y2="72"/>
+          <line x1="30" y1="20" x2="30" y2="80"/>
+          <line x1="50" y1="20" x2="50" y2="80"/>
+          <line x1="70" y1="20" x2="70" y2="80"/>
+        </svg>
+      </div>
+      <div class="brand">logiclass</div>
+      <div class="tagline">בינה מלאכותית למערכת שעות</div>
+    </div>
+
+    <!-- Scene 2: Problem -->
+    <div class="scene" id="scene2">
+      <div class="icon-big">😩</div>
+      <div class="headline">3 שבועות של עבודה<br/><span class="cross">✕</span> ועוד לא סיימת?</div>
+      <div class="sub">יש דרך אחרת.</div>
+    </div>
+
+    <!-- Scene 3: AI builds schedule -->
+    <div class="scene" id="scene3">
+      <div class="title">🧠 המודל בונה. בזמן אמת.</div>
+      <div class="grid-demo">
+        <div class="demo-header">
+          <div>
+            <div class="demo-header-title">כיתה ז׳ 1 — אולפנה</div>
+            <div class="demo-header-phase" id="phaseText">טוען אילוצים...</div>
+          </div>
+          <div>
+            <div class="demo-score" id="scoreText">0</div>
+            <div class="demo-score-label">ציון</div>
+          </div>
+        </div>
+        <div class="grid-table" id="gridTable"></div>
+      </div>
+    </div>
+
+    <!-- Scene 4: Constraints -->
+    <div class="scene" id="scene4">
+      <div class="title">27 סוגי אילוצים. כולם יחד.</div>
+      <div class="chips-wrap" id="chipsWrap">
+        <span class="chip">📌 שעה נעוצה</span>
+        <span class="chip">⚡ שעות כפולות</span>
+        <span class="chip">🏠 ישיבת מחנכת</span>
+        <span class="chip">🌅 בוקר עדיף</span>
+        <span class="chip">🚗 סיום מוקדם למורה</span>
+        <span class="chip">📅 יום חופשי</span>
+        <span class="chip">🚫 אין חלונות</span>
+        <span class="chip">🤝 סנכרון הקבצות</span>
+        <span class="chip">🎯 פיזור ימים</span>
+      </div>
+    </div>
+
+    <!-- Scene 5: Result -->
+    <div class="scene" id="scene5">
+      <div class="big-num">8<span style="font-size: 120px;">h</span></div>
+      <div class="big-label">במקום 3 שבועות</div>
+      <div class="sub">מערכת אופטימלית. מוכחת.</div>
+      <div class="stat-row">
+        <div class="stat-item"><div class="stat-v">95%</div><div class="stat-l">אילוצים התקיימו</div></div>
+        <div class="stat-item"><div class="stat-v">5</div><div class="stat-l">פתרונות לבחירה</div></div>
+        <div class="stat-item"><div class="stat-v">867</div><div class="stat-l">שעות שבועיות</div></div>
+      </div>
+    </div>
+
+    <!-- Scene 6: CTA -->
+    <div class="scene" id="scene6">
+      <div class="logo-small">
+        <svg viewBox="0 0 100 100" fill="none" stroke="white" stroke-width="5" stroke-linecap="round">
+          <line x1="22" y1="28" x2="78" y2="28"/>
+          <line x1="22" y1="50" x2="78" y2="50"/>
+          <line x1="22" y1="72" x2="78" y2="72"/>
+          <line x1="30" y1="20" x2="30" y2="80"/>
+          <line x1="50" y1="20" x2="50" y2="80"/>
+          <line x1="70" y1="20" x2="70" y2="80"/>
+        </svg>
+      </div>
+      <div class="cta-headline">
+        שעות, לא <span class="accent">שבועות</span>.
+      </div>
+      <div class="cta-sub">ליווי אישי מאנשי מקצוע</div>
+      <div class="cta-url">logiclass.co.il</div>
+    </div>
+  </div>
+
+  <script>
+    // Scale to fit viewport
+    function rescale() {
+      const stage = document.querySelector(".stage");
+      const scaleW = window.innerWidth / 1080;
+      const scaleH = window.innerHeight / 1920;
+      const scale = Math.min(scaleW, scaleH, 1) * 0.95;
+      stage.style.setProperty("--scale", scale);
+    }
+    window.addEventListener("resize", rescale);
+    rescale();
+
+    // ── Schedule data (same as main landing) ──
+    const SUBJ = {
+      תנך: { label: "תנ״ך", cls: "cell-success" },
+      מדעים: { label: "מדעים", cls: "cell-purple" },
+      לשון: { label: "לשון", cls: "cell-success" },
+      אנגלית: { label: "אנגלית", cls: "cell-blue" },
+      התמחויות: { label: "התמחויות", cls: "cell-error" },
+      מתמטיקה: { label: "מתמטיקה", cls: "cell-teal" },
+      היסטוריה: { label: "היסטוריה", cls: "cell-coral" },
+      חינוך: { label: "חינוך", cls: "cell-error" },
+      הלכה: { label: "הלכה", cls: "cell-teal" },
+      ספורט: { label: "חינ״ג", cls: "cell-warning" },
+      תושבע: { label: "תושב״ע", cls: "cell-purple" },
+      גיאוגרפיה: { label: "גיאו'", cls: "cell-warning" },
+      גשרים: { label: "גשרים", cls: "cell-coral" },
+      נפגשים: { label: "נפגשים", cls: "cell-success" },
+      ספרות: { label: "ספרות", cls: "cell-success" },
+      קומי: { label: "קומי", cls: "cell-teal" },
+    };
+
+    const SCHEDULE = [
+      { d: 0, p: 0, ...SUBJ.תנך },
+      { d: 0, p: 1, ...SUBJ.מדעים },
+      { d: 0, p: 2, ...SUBJ.לשון },
+      { d: 0, p: 3, ...SUBJ.לשון },
+      { d: 0, p: 4, ...SUBJ.אנגלית },
+      { d: 0, p: 5, ...SUBJ.אנגלית },
+      { d: 1, p: 0, ...SUBJ.מדעים },
+      { d: 1, p: 1, ...SUBJ.מדעים },
+      { d: 1, p: 2, ...SUBJ.תנך },
+      { d: 1, p: 3, ...SUBJ.מתמטיקה },
+      { d: 1, p: 4, ...SUBJ.היסטוריה },
+      { d: 1, p: 5, ...SUBJ.היסטוריה },
+      { d: 2, p: 0, ...SUBJ.ספורט },
+      { d: 2, p: 1, ...SUBJ.תושבע },
+      { d: 2, p: 2, ...SUBJ.תושבע },
+      { d: 2, p: 3, ...SUBJ.אנגלית },
+      { d: 2, p: 4, ...SUBJ.אנגלית },
+      { d: 2, p: 5, ...SUBJ.גיאוגרפיה },
+      { d: 3, p: 0, ...SUBJ.נפגשים },
+      { d: 3, p: 1, ...SUBJ.לשון },
+      { d: 3, p: 2, ...SUBJ.גשרים },
+      { d: 3, p: 3, ...SUBJ.גשרים },
+      { d: 3, p: 4, ...SUBJ.מתמטיקה },
+      { d: 3, p: 5, ...SUBJ.מתמטיקה },
+      { d: 4, p: 0, ...SUBJ.מתמטיקה },
+      { d: 4, p: 1, ...SUBJ.מתמטיקה },
+      { d: 4, p: 2, ...SUBJ.ספרות },
+      { d: 4, p: 3, ...SUBJ.תנך },
+      { d: 4, p: 4, ...SUBJ.תנך },
+      { d: 4, p: 5, ...SUBJ.היסטוריה },
+    ];
+
+    const PHASES = [
+      "טוען אילוצים...",
+      "ממקסם שעות כפולות...",
+      "מחלק ימים חופשיים...",
+      "משפר ציון כולל...",
+      "פתרון אופטימלי נמצא ✓",
+    ];
+
+    // Build grid skeleton
+    function buildGrid() {
+      const g = document.getElementById("gridTable");
+      g.innerHTML = "";
+      g.appendChild(document.createElement("div"));
+      for (const day of ["א", "ב", "ג", "ד", "ה"]) {
+        const e = document.createElement("div");
+        e.className = "grid-cell-header";
+        e.textContent = day;
+        g.appendChild(e);
+      }
+      for (let p = 1; p <= 6; p++) {
+        const n = document.createElement("div");
+        n.className = "grid-cell-num";
+        n.textContent = p;
+        g.appendChild(n);
+        for (let d = 0; d < 5; d++) {
+          const c = document.createElement("div");
+          c.className = "grid-cell";
+          c.dataset.key = `${d}-${p - 1}`;
+          g.appendChild(c);
+        }
+      }
+    }
+    buildGrid();
+
+    // ── Audio (Web Audio API — procedural) ──
+    let audioCtx = null, audioEnabled = false, gain = null;
+    let bassInterval = null, melodyInterval = null;
+
+    function startAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        gain = audioCtx.createGain();
+        gain.gain.value = 0.15;
+        gain.connect(audioCtx.destination);
+      }
+      audioCtx.resume();
+
+      // Ambient pad
+      const pad = audioCtx.createOscillator();
+      pad.type = "sine";
+      pad.frequency.value = 110;
+      const padGain = audioCtx.createGain();
+      padGain.gain.value = 0.3;
+      pad.connect(padGain).connect(gain);
+      pad.start();
+
+      // Slow bass pulse
+      const bassNotes = [55, 73.4, 82.4, 98];
+      let bi = 0;
+      bassInterval = setInterval(() => {
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.type = "triangle";
+        o.frequency.value = bassNotes[bi % 4];
+        g.gain.setValueAtTime(0, audioCtx.currentTime);
+        g.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.05);
+        g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.8);
+        o.connect(g).connect(gain);
+        o.start();
+        o.stop(audioCtx.currentTime + 2);
+        bi++;
+      }, 2000);
+
+      // Melodic ding every ~800ms (like cells filling)
+      const notes = [523.25, 587.33, 659.25, 783.99, 880, 783.99, 659.25, 587.33];
+      let mi = 0;
+      melodyInterval = setInterval(() => {
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.type = "sine";
+        o.frequency.value = notes[mi % notes.length];
+        g.gain.setValueAtTime(0, audioCtx.currentTime);
+        g.gain.linearRampToValueAtTime(0.15, audioCtx.currentTime + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+        o.connect(g).connect(gain);
+        o.start();
+        o.stop(audioCtx.currentTime + 0.6);
+        mi++;
+      }, 600);
+    }
+
+    function stopAudio() {
+      if (bassInterval) clearInterval(bassInterval);
+      if (melodyInterval) clearInterval(melodyInterval);
+      if (audioCtx) audioCtx.close();
+      audioCtx = null;
+    }
+
+    function toggleAudio() {
+      const btn = document.getElementById("audioBtn");
+      if (audioEnabled) {
+        stopAudio();
+        audioEnabled = false;
+        btn.textContent = "🔇 הפעל צליל";
+      } else {
+        startAudio();
+        audioEnabled = true;
+        btn.textContent = "🔊 צליל פועל";
+      }
+    }
+
+    // ── Promo sequencer ──
+    const TIMINGS = [
+      { id: "scene1", duration: 3000 },   // logo intro
+      { id: "scene2", duration: 3000 },   // problem
+      { id: "scene3", duration: 6000 },   // AI builds
+      { id: "scene4", duration: 3500 },   // constraints
+      { id: "scene5", duration: 3000 },   // result
+      { id: "scene6", duration: 3500 },   // CTA
+    ];
+    const TOTAL = TIMINGS.reduce((s, t) => s + t.duration, 0);
+
+    function showScene(id) {
+      document.querySelectorAll(".scene").forEach(s => s.classList.remove("active"));
+      const el = document.getElementById(id);
+      if (el) el.classList.add("active");
+
+      if (id === "scene3") animateGrid();
+      if (id === "scene4") animateChips();
+    }
+
+    function animateGrid() {
+      document.querySelectorAll(".grid-cell").forEach(c => {
+        c.className = "grid-cell";
+        c.textContent = "";
+      });
+      document.getElementById("scoreText").textContent = "0";
+      SCHEDULE.forEach((s, i) => {
+        setTimeout(() => {
+          const c = document.querySelector(`.grid-cell[data-key="${s.d}-${s.p}"]`);
+          if (c) {
+            c.className = `grid-cell filled ${s.cls}`;
+            c.textContent = s.label;
+          }
+          const pct = Math.round(((i + 1) / SCHEDULE.length) * 100);
+          document.getElementById("scoreText").textContent = Math.min(Math.round(pct * 0.97), 97);
+          const phase = Math.min(Math.floor(pct / 20), PHASES.length - 1);
+          document.getElementById("phaseText").textContent = PHASES[phase];
+        }, i * 150);
+      });
+    }
+
+    function animateChips() {
+      const chips = document.querySelectorAll("#scene4 .chip");
+      chips.forEach(c => c.classList.remove("show"));
+      chips.forEach((c, i) => {
+        setTimeout(() => c.classList.add("show"), i * 250);
+      });
+    }
+
+    let promoStart = null;
+    let promoRaf = null;
+    function startPromo() {
+      if (!audioEnabled) {
+        startAudio();
+        audioEnabled = true;
+        document.getElementById("audioBtn").textContent = "🔊 צליל פועל";
+      }
+
+      promoStart = Date.now();
+      let cumulative = 0;
+      const schedule = TIMINGS.map(t => {
+        const start = cumulative;
+        cumulative += t.duration;
+        return { ...t, start };
+      });
+
+      // Show scenes
+      schedule.forEach(s => {
+        setTimeout(() => showScene(s.id), s.start);
+      });
+
+      // Progress bar + loop
+      function tick() {
+        const elapsed = Date.now() - promoStart;
+        const pct = Math.min((elapsed / TOTAL) * 100, 100);
+        document.getElementById("timelineProgress").style.width = pct + "%";
+        if (elapsed < TOTAL) {
+          promoRaf = requestAnimationFrame(tick);
+        } else {
+          // Loop
+          setTimeout(startPromo, 1500);
+        }
+      }
+      promoRaf = requestAnimationFrame(tick);
+    }
+
+    // Autostart after 500ms (user needs to click once for audio permission)
+    setTimeout(() => showScene("scene1"), 100);
+  </script>
+</body>
+</html>

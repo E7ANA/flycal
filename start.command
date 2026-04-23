@@ -24,14 +24,14 @@ echo ""
 # Start backend
 echo "מפעיל backend..."
 cd backend
-.venv/bin/uvicorn app.main:app --reload --port 8000 &
+.venv/bin/uvicorn app.main:app --reload --port 8200 &
 BACKEND_PID=$!
 cd ..
 
 # Start frontend
 echo "מפעיל frontend..."
 cd frontend
-npm run dev -- --port 5173 &
+npm run dev -- --port 5273 &
 FRONTEND_PID=$!
 cd ..
 
@@ -39,10 +39,10 @@ cd ..
 echo "ממתין לשרתים..."
 sleep 3
 echo "פותח דפדפן..."
-open http://localhost:5173
+open http://localhost:5273
 
 echo ""
-echo "האפליקציה רצה על http://localhost:5173"
+echo "האפליקציה רצה על http://localhost:5273"
 echo "לחץ Ctrl+C לסגירה"
 echo ""
 

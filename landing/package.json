@@ -1,0 +1,12 @@
+{
+  "name": "logiclass-landing",
+  "version": "1.0.0",
+  "description": "logiclass marketing landing page — static HTML/CSS/JS",
+  "scripts": {
+    "start": "npx serve -s . -l 3000",
+    "build": "echo 'Static site — no build step needed'"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

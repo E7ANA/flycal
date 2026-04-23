@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     secret_key: str = "change-me-in-production-use-a-real-secret-key"
 
     # CORS — allow Render domain + localhost
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    cors_origins: list[str] = ["http://localhost:5273", "http://localhost:3000"]
 
     @property
     def is_production(self) -> bool:

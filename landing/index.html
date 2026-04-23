@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>logiclass — מערכת שעות חכמה לבתי ספר</title>
+  <meta name="description" content="בינה מלאכותית שבונה מערכת שעות מיטבית. מודל אופטימיזציה שחוקר מיליוני אפשרויות, ממקסם תעדופים סותרים, ומתסנכרן עם שחף בלחיצת כפתור." />
+
+  <meta property="og:title" content="logiclass — מערכת שעות חכמה לבתי ספר" />
+  <meta property="og:description" content="בינה מלאכותית שבונה מערכת שעות מיטבית תוך שעות — לא שבועות. משולבת עם שחף, עם ליווי צמוד מאנשי מקצוע." />
+  <meta property="og:image" content="og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:type" content="website" />
+  <meta property="og:locale" content="he_IL" />
+  <meta property="og:site_name" content="logiclass" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="logiclass — מערכת שעות חכמה לבתי ספר" />
+  <meta name="twitter:description" content="AI שבונה מערכת שעות מיטבית תוך שעות — לא שבועות." />
+  <meta name="twitter:image" content="og-image.png" />
+
+  <link rel="icon" type="image/svg+xml" href="logiclass.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ── Navbar ── -->
+  <header class="navbar">
+    <div class="container nav-inner">
+      <a href="./" class="logo-link">
+        <img src="logiclass.svg" alt="logiclass" class="logo-img" />
+        <span class="logo-text">logiclass</span>
+      </a>
+      <nav class="nav-links">
+        <a href="#experts">אנשי המקצוע</a>
+        <a href="#comparison">אנושי vs אלגוריתם</a>
+        <a href="#how">איך זה עובד</a>
+        <a href="#improvements">מקצי שיפורים</a>
+        <a href="#sync">סנכרון ואילוצים</a>
+        <a href="#features">תכונות</a>
+        <a href="#case-study">מקרה בוחן</a>
+      </nav>
+      <div class="nav-cta">
+        <a href="#contact" class="btn btn-primary btn-sm">התחל ניסיון</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Hero ── -->
+  <section class="hero">
+    <div class="container hero-grid">
+      <div class="hero-text">
+        <div class="badge">
+          <span class="i" data-icon="brain"></span>
+          <span>מודל AI שפותר במקומך</span>
+        </div>
+        <h1 class="h1">
+          בינה מלאכותית<br/>
+          <span class="accent">שבונה מערכת שעות</span><br/>
+          מיטבית.
+        </h1>
+        <p class="lead">
+          מודל אופטימיזציה חוקר מיליוני אפשרויות, משקלל תעדופים סותרים,
+          ומוציא את המערכת הטובה ביותר עבורך —
+          <strong>הפתרון הטוב ביותר שקיים, מוכח מתמטית</strong>.
+        </p>
+        <div class="cta-row">
+          <a href="#contact" class="btn btn-primary">התחל ניסיון חינם</a>
+          <a href="#how" class="btn btn-ghost">צפה בדוגמה <span class="i" data-icon="arrow"></span></a>
+        </div>
+      </div>
+      <div class="hero-demo">
+        <div class="demo-card">
+          <div class="demo-header">
+            <div class="demo-header-info">
+              <div class="brain-dot"><span class="i" data-icon="brain"></span></div>
+              <div>
+                <div class="demo-title">כיתה ז׳ 1 — אולפנה (פתרון אמיתי)</div>
+                <div class="demo-phase" id="demoPhase">טוען אילוצים...</div>
+              </div>
+            </div>
+            <div class="demo-score">
+              <div class="score-value" id="demoScore">0</div>
+              <div class="score-label">ציון</div>
+            </div>
+          </div>
+          <div class="demo-progress"><div class="demo-progress-bar" id="demoProgress"></div></div>
+          <div class="demo-grid" id="demoGrid"></div>
+          <div class="demo-chips">
+            <div class="chips-title">אילוצים ותעדופים שמטופלים בזמן אמת:</div>
+            <div class="chips-list" id="demoChips"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Stats ── -->
+  <section class="stats">
+    <div class="container stats-grid">
+      <div class="stat"><div class="stat-value" data-target="10" data-suffix="+">0</div><div class="stat-label">שנות ניסיון בבניית מערכות</div></div>
+      <div class="stat"><div class="stat-value" data-target="95" data-suffix="%">0</div><div class="stat-label">אחוז אילוצים שמתקיימים</div></div>
+      <div class="stat"><div class="stat-value" data-target="27">0</div><div class="stat-label">סוגי אילוצים נתמכים</div></div>
+      <div class="stat"><div class="stat-value" data-target="5">0</div><div class="stat-label">פתרונות חלופיים לבחירה</div></div>
+    </div>
+  </section>
+
+  <!-- ── Experts ── -->
+  <section id="experts" class="experts">
+    <div class="container two-col">
+      <div>
+        <div class="badge"><span class="i" data-icon="shield"></span><span>מי עומד מאחורי המערכת</span></div>
+        <h2 class="h2">נבנתה על ידי<br/><span class="accent">אנשי מקצוע מנוסים</span></h2>
+        <p class="lead">
+          מעל <strong>10 שנים</strong> של ניסיון בבניית מערכות שעות במספר מוסדות חינוך.
+          הכרנו מקרוב את כל הפתרונות החיצוניים בשוק — שחף, תכנון אנושי ידני, ועוד —
+          ולמדנו את היתרונות והחסרונות של כל אחד.
+        </p>
+        <p class="lead">
+          <strong>logiclass</strong> היא הסינתזה: כל הניסיון המעשי של בונה מערכות ותיק,
+          משולב עם אלגוריתמי אופטימיזציה מתקדמים (OR-Tools של Google) — שפשוט לא היו
+          זמינים למוסדות חינוך עד היום.
+        </p>
+        <div class="mini-grid">
+          <div class="mini-card"><div class="mini-title">מוסדות</div><div class="mini-desc">מערכות אופטימליות נוצרו בהצלחה במספר מוסדות חינוך בפועל</div></div>
+          <div class="mini-card"><div class="mini-title">ליווי צמוד</div><div class="mini-desc">אנשי מקצוע זמינים ללוות את ההטמעה מהרגע הראשון</div></div>
+        </div>
+      </div>
+      <div id="case-study" class="case-card">
+        <div class="case-kicker">מקרה בוחן — אולפנה תשפ״ו</div>
+        <div class="case-title">מוסד פעיל שהמערכת נבנתה עבורו</div>
+        <div class="case-stats">
+          <div class="case-row"><span>מורים</span><strong>44</strong></div>
+          <div class="case-row"><span>כיתות (ז׳–יב׳)</span><strong>12</strong></div>
+          <div class="case-row"><span>מקצועות</span><strong>37</strong></div>
+          <div class="case-row"><span>דרישות שעות</span><strong>309</strong></div>
+          <div class="case-row"><span>סה״כ שעות שבועיות</span><strong>867</strong></div>
+          <div class="case-row"><span>אילוצים פעילים</span><strong>27+</strong></div>
+        </div>
+        <div class="case-checks">
+          <div class="check"><span class="i-sm" data-icon="check"></span> מערכת אופטימלית התקבלה תוך ~8 שעות עבודה</div>
+          <div class="check"><span class="i-sm" data-icon="check"></span> 95% מהאילוצים הרכים התקיימו במלואם</div>
+          <div class="check"><span class="i-sm" data-icon="check"></span> שודרה חזרה לשחף בלחיצה אחת</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Human vs Algorithm ── -->
+  <section id="comparison" class="comparison">
+    <div class="container">
+      <div class="center mb-lg">
+        <div class="badge"><span class="i" data-icon="brain"></span><span>ההבדל הגדול</span></div>
+        <h2 class="h2">תכנון אנושי מול<br/><span class="accent">אופטימיזציה רוחבית</span></h2>
+        <p class="lead center-text">
+          מתכנן אנושי, גם מנוסה, בונה את המערכת <strong>הדרגתית</strong> —
+          שיעור אחרי שיעור, מתקן התנגשויות תוך כדי, ומגיע לפתרון שעובד. אבל האם זה
+          <em>הפתרון הטוב ביותר שיכול היה להיות?</em> אין דרך לדעת.
+        </p>
+      </div>
+      <div class="compare-grid">
+        <div class="compare-card">
+          <div class="compare-top-line muted"></div>
+          <div class="compare-head">
+            <div class="compare-icon muted-bg"><span class="i-lg" data-icon="user"></span></div>
+            <div>
+              <div class="compare-kicker">הדרך הישנה</div>
+              <h3>תכנון אנושי</h3>
+            </div>
+          </div>
+          <ul class="compare-list">
+            <li><span class="bullet">◆</span> חושב שיעור-שיעור, יום-יום</li>
+            <li><span class="bullet">◆</span> כל החלטה מוקדמת מגבילה את הבאות</li>
+            <li><span class="bullet">◆</span> התנגשויות מתגלות רק בדיעבד</li>
+            <li><span class="bullet">◆</span> 'עובד' ≠ 'אופטימלי' — אין דרך למדוד</li>
+            <li><span class="bullet">◆</span> שינוי קטן = לעתים שבירת חצי מערכת</li>
+            <li><span class="bullet">◆</span> 3–4 שבועות של עבודה מאומצת</li>
+          </ul>
+          <div class="compare-result">
+            <div class="compare-result-label">תוצאה:</div>
+            <div>פתרון שעובד — אבל לא בהכרח הטוב ביותר</div>
+          </div>
+        </div>
+        <div class="compare-card highlight">
+          <div class="compare-top-line primary"></div>
+          <div class="compare-head">
+            <div class="compare-icon primary-bg"><span class="i-lg" data-icon="brain"></span></div>
+            <div>
+              <div class="compare-kicker primary-text">logiclass</div>
+              <h3>מודל אופטימיזציה רוחבית</h3>
+            </div>
+          </div>
+          <ul class="compare-list">
+            <li class="check-li"><span class="i-sm" data-icon="check"></span> חושב על כל המערכת בבת אחת</li>
+            <li class="check-li"><span class="i-sm" data-icon="check"></span> שוקל מיליוני אפשרויות במקביל</li>
+            <li class="check-li"><span class="i-sm" data-icon="check"></span> אלגוריתם מקסימום (CP-SAT) מוכיח אופטימליות</li>
+            <li class="check-li"><span class="i-sm" data-icon="check"></span> כל אילוץ מקבל משקל — ציון מדיד</li>
+            <li class="check-li"><span class="i-sm" data-icon="check"></span> שינוי נקודתי = חישוב מחדש מיידי</li>
+            <li class="check-li"><span class="i-sm" data-icon="check"></span> שעות עבודה במקום שבועות</li>
+          </ul>
+          <div class="compare-result">
+            <div class="compare-result-label">תוצאה:</div>
+            <div class="primary-text"><strong>פתרון מוכח-אופטימלי לפי התעדופים שלך</strong></div>
+          </div>
+        </div>
+      </div>
+      <div class="center mt-lg">
+        <div class="quote-box">
+          <strong>זה לא שה-AI יודע יותר מהמתכנן.</strong>
+          זה שהמתכנן <em>פשוט לא יכול</em> לשקול מיליארדי קומבינציות בראש —
+          וגם לא אמור.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── How it works — Priority Demo ── -->
+  <section id="how" class="how">
+    <div class="container two-col">
+      <div>
+        <div class="badge"><span class="i" data-icon="brain"></span><span>שלב 1</span></div>
+        <h2 class="h2">מודל שממקסם את<br/><span class="accent">התעדוף של המנהל/ת</span></h2>
+        <p class="lead">
+          לא כלי שמציע פתרונות — מודל מתמטי שחוקר מיליוני אפשרויות ובוחר
+          את המערכת שמיטיבה עם <strong>מה שחשוב לך</strong>.
+          אתה קובע: שעה כפולה לשיעור חשובה יותר מסיום יום מוקדם? המודל יכבד את זה.
+        </p>
+        <ul class="bullet-list">
+          <li><span class="i-sm" data-icon="check"></span> תעדוף לפי משקלים — אתה שולט</li>
+          <li><span class="i-sm" data-icon="check"></span> התנגשויות נפתרות לטובת מה שמוגדר כחשוב</li>
+          <li><span class="i-sm" data-icon="check"></span> אילוצים קשים (HARD) — לעולם לא מופרים</li>
+          <li><span class="i-sm" data-icon="check"></span> אילוצים רכים (SOFT) — ממוקסמים לפי משקל</li>
+        </ul>
+      </div>
+      <div class="slider-card">
+        <div class="slider-head"><span class="i" data-icon="sliders"></span> דוגמה: מי מנצח בהתנגשות?</div>
+        <p class="muted-text">
+          שעה כפולה למקצוע <strong>מול</strong> הימנעות מסיום יום מאוחר.
+          הזז את הסליידרים — המודל יחליט לפי התעדוף שלך.
+        </p>
+        <div class="slider-group">
+          <div class="slider-label"><span>שעה כפולה למקצוע</span><span id="val1" class="primary-text bold">80</span></div>
+          <input type="range" id="slider1" min="1" max="100" value="80" />
+        </div>
+        <div class="slider-group">
+          <div class="slider-label"><span>הימנעות מסיום יום מאוחר</span><span id="val2" class="primary-text bold">55</span></div>
+          <input type="range" id="slider2" min="1" max="100" value="55" />
+        </div>
+        <div class="slider-result">
+          <div class="muted-text small">תוצאה צפויה</div>
+          <div class="result-bar">
+            <div id="bar1" class="bar-primary"></div>
+            <div id="bar2" class="bar-success"></div>
+          </div>
+          <p id="resultText" class="muted-text small"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Improvements ── -->
+  <section id="improvements" class="improvements">
+    <div class="container two-col">
+      <div class="timeline-card">
+        <div class="timeline-head">
+          <div class="timeline-icon"><span class="i-lg" data-icon="clock"></span></div>
+          <div>
+            <div class="timeline-title">מסלול טיפוסי לבית ספר בינוני</div>
+            <div class="timeline-kicker">~30 מורים, 18 כיתות, 40 מקצועות</div>
+          </div>
+        </div>
+        <div class="timeline">
+          <div class="timeline-item"><div class="timeline-time">15 דק'</div><div>ייבוא נתונים משחף או קליטה מאקסל</div></div>
+          <div class="timeline-item"><div class="timeline-time">1–2 שעות</div><div>הגדרת תעדופים, אילוצים וחסימות</div></div>
+          <div class="timeline-item"><div class="timeline-time">30 דק'</div><div>הרצת הסולבר — 5 פתרונות מדורגים</div></div>
+          <div class="timeline-item highlight"><div class="timeline-time">3–4 שעות</div><div><strong>מקצי שיפורים: כיול, 'מה-אם', אופטימיזציה נוספת</strong></div></div>
+          <div class="timeline-item"><div class="timeline-time">5 דק'</div><div>מערכת סופית מייוצאת חזרה לשחף</div></div>
+        </div>
+        <div class="timeline-footer">במקום 3–4 שבועות של עבודה ידנית — <strong>כ-8 שעות עבודה בלבד</strong>, כולל ליווי מקצועי.</div>
+      </div>
+      <div>
+        <div class="badge"><span class="i" data-icon="trending"></span><span>שלב 2 — הלב של המערכת</span></div>
+        <h2 class="h2">מקצי שיפורים —<br/><span class="accent">הקסם האמיתי</span></h2>
+        <p class="lead">
+          הפתרון הראשון הוא רק נקודת התחלה. הכוח האמיתי הוא
+          <strong>מקצי השיפורים</strong> — שינויים קטנים ומהירים שמעדנים את המערכת
+          בדיוק לצרכים שלך. "מה יקרה אם אעביר את שרית ליום שלישי?" — תשובה תוך שניות, לא ימים.
+        </p>
+        <div class="feature-mini">
+          <div class="feature-mini-item"><div class="fm-head"><span class="i" data-icon="trending"></span><strong>שינוי נקודתי, חישוב מחדש מיידי</strong></div><p>העבר שעה אחת — הסולבר מעדכן את כל ההשלכות אוטומטית, בלי לשבור שום אילוץ.</p></div>
+          <div class="feature-mini-item"><div class="fm-head"><span class="i" data-icon="target"></span><strong>תרחישי "מה-אם"</strong></div><p>"מה אם מורה X יחסר ביום רביעי?" — תרחיש מלא, השוואה, ובחירה מושכלת.</p></div>
+          <div class="feature-mini-item"><div class="fm-head"><span class="i" data-icon="sparkles"></span><strong>שיפור אינקרמנטלי</strong></div><p>כל שיפור שומר על הפתרון הקודם כגיבוי — אפשר לחזור תמיד. לנסות ולא לדאוג.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Sync ── -->
+  <section id="sync" class="sync">
+    <div class="container two-col">
+      <div>
+        <div class="badge"><span class="i" data-icon="refresh"></span><span>שלב 3</span></div>
+        <h2 class="h2">הזנת אילוצים<br/><span class="accent">מהירה ומסונכרנת</span></h2>
+        <p class="lead">
+          הזן תעדופים ואילוצים בממשק פשוט ומהיר — המערכת מסתנכרנת עם
+          <strong>שחף</strong> בלחיצה אחת. ייבוא נתונים קיימים, ייצוא של הפתרון הסופי —
+          לא צריך להקליד שום דבר פעמיים.
+        </p>
+        <div class="tags">
+          <span class="tag">ייבוא משחף</span>
+          <span class="tag">ייצוא לשחף</span>
+          <span class="tag">ייבוא מאקסל</span>
+          <span class="tag">ייצוא לאקסל</span>
+          <span class="tag">27 סוגי אילוצים</span>
+          <span class="tag">אילוצים קשים + רכים</span>
+        </div>
+      </div>
+      <div class="sync-cards">
+        <div class="sync-card">
+          <div class="sync-card-head">
+            <div class="sync-icon"><span class="i" data-icon="refresh"></span></div>
+            <div class="sync-card-title"><div>סנכרון דו-כיווני עם שחף</div><div class="muted-text small">מורים, כיתות, מקצועות, שיעורים</div></div>
+            <span class="pill-success">מקושר</span>
+          </div>
+          <div class="sync-card-foot">ייבוא: תוך 2 שניות • ייצוא: תוך 5 שניות</div>
+        </div>
+        <div class="sync-card">
+          <div class="sync-card-head">
+            <div class="sync-icon"><span class="i" data-icon="sliders"></span></div>
+            <div class="sync-card-title"><div>גיליון אילוצים — הכל במקום אחד</div><div class="muted-text small">גרר, הגדר, הפעל/כבה בלחיצה</div></div>
+          </div>
+          <div class="sync-grid-mini">
+            <span>מורים</span><span>מקצועות</span><span>כיתות</span>
+            <span>הקבצות</span><span>ישיבות</span><span>שיעורים</span>
+          </div>
+        </div>
+        <div class="sync-card">
+          <div class="sync-card-head">
+            <div class="sync-icon"><span class="i" data-icon="shield"></span></div>
+            <div class="sync-card-title"><div>אימות אוטומטי לפני הרצה</div><div class="muted-text small">המערכת מאתרת אילוצים סותרים לפני שאתה מבזבז זמן</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Features ── -->
+  <section id="features" class="features">
+    <div class="container">
+      <div class="center mb-lg">
+        <h2 class="h2">כל מה שמנהל/ת<br/><span class="accent">בית ספר צריך/ה</span></h2>
+        <p class="lead center-text">ממשק מותאם למציאות הישראלית — RTL, מסודר, מהיר, ומבין את הייחודיות של מערכת החינוך אצלנו.</p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card"><div class="feature-icon"><span class="i-lg" data-icon="calendar"></span></div><h3>מערכת עברית, מציאות ישראלית</h3><p>שבוע ראשון-שישי, שכבות ז-יב, הקבצות (מתמטיקה, אנגלית), מפגשי חינוך ובגרויות — הכל בנוי לבית ספר ישראלי.</p></div>
+        <div class="feature-card"><div class="feature-icon"><span class="i-lg" data-icon="target"></span></div><h3>תעדוף לפי משקלים</h3><p>כל אילוץ רך מקבל משקל 1-100. המודל מחפש פתרון שמטיב עם האילוצים בעלי המשקלים הגבוהים ביותר.</p></div>
+        <div class="feature-card"><div class="feature-icon"><span class="i-lg" data-icon="sparkles"></span></div><h3>5 פתרונות לבחירה</h3><p>לא מערכת אחת — המערכת מייצרת כמה פתרונות שונים זה מזה ומציגה דירוג לפי ניקוד, כך שאתה בוחר את הטוב.</p></div>
+        <div class="feature-card"><div class="feature-icon"><span class="i-lg" data-icon="shield"></span></div><h3>אין מצב של 'לא הצלחתי'</h3><p>אם יש בעיה — המערכת אומרת לך בדיוק מה הפריע: איזה אילוץ סותר, איזה מורה לא זמין מספיק, איפה יש חוסר.</p></div>
+        <div class="feature-card"><div class="feature-icon"><span class="i-lg" data-icon="trending"></span></div><h3>ניתוח מה-אם</h3><p>רוצה לראות מה יקרה אם תוסיף עוד שעה לאנגלית? הפעל תרחיש, השווה ובחר. שום דבר לא בלי נתונים.</p></div>
+        <div class="feature-card"><div class="feature-icon"><span class="i-lg" data-icon="export"></span></div><h3>ייצוא לכל מה שאתה צריך</h3><p>שחף, אקסל, PDF. לכל מורה המערכת האישית, לכל כיתה המערכת שלה, ולמנהל התמונה הכללית.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── CTA ── -->
+  <section id="contact" class="cta">
+    <div class="container center">
+      <h2 class="h2">מוכן/ה לחסוך<br/><span class="accent">שבועות של עבודה?</span></h2>
+      <p class="lead center-text">
+        בשנה הראשונה — ליווי מלא ממקצוען/ית שמבין/ה גם מערכות שעות וגם אופטימיזציה.
+        הזן את הנתונים שלך, ותראה תוך שעות את המערכת הראשונה שלך.
+      </p>
+      <div class="cta-row center-flex">
+        <a href="mailto:eranassulin@mail.tau.ac.il" class="btn btn-primary">התחל ניסיון חינם</a>
+        <a href="promo/" class="btn btn-ghost">צפה בסרטון</a>
+      </div>
+      <p class="muted-text">שאלות? כתוב ל-<a href="mailto:eranassulin@mail.tau.ac.il" class="link-primary">eranassulin@mail.tau.ac.il</a></p>
+    </div>
+  </section>
+
+  <!-- ── Footer ── -->
+  <footer class="footer">
+    <div class="container footer-inner">
+      <div class="footer-logo">
+        <img src="logiclass.svg" alt="logiclass" />
+        <span>logiclass</span>
+      </div>
+      <div class="footer-copy">© <span id="year"></span> logiclass — מערכת שעות חכמה לבתי ספר</div>
+    </div>
+  </footer>
+
+  <script src="icons.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>

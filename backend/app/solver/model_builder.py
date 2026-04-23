@@ -355,7 +355,6 @@ def add_system_constraints(
     _add_grouping_extra_hours_end_of_day(model, data, variables)
     _add_linked_tracks_no_overlap(model, data, variables)
     _add_subject_blocked_slots(model, data, variables)
-    _add_high_school_daily_core(model, data, variables)
     _add_subject_link_group_daily_limit(model, data, variables)
     _add_subject_limit_last_periods(model, data, variables)
     _add_teacher_late_finish_limit(model, data, variables)
@@ -1420,84 +1419,6 @@ def _add_subject_blocked_slots(
                 if tr_id == track.id and (day, period) in blocked:
                     model.add(var == 0)
 
-
-
-# ---------------------------------------------------------------------------
-# System Constraint: High School Daily Core Subjects
-# כיתות י-יא-יב חייבות בכל יום לפחות שיעור אחד של אנגלית/מתמטיקה/מגמות
-# ---------------------------------------------------------------------------
-_CORE_SUBJECT_KEYWORDS = {"אנגלית", "מתמטיקה"}
-
-
-def _add_high_school_daily_core(
-    model: cp_model.CpModel, data: SolverData, variables: SolverVariables
-) -> None:
-    MIN_GRADE_LEVEL = 10  # י and above
-
-    # Identify core subject IDs (English, Math)
-    core_subject_ids: set[int] = set()
-    for subj in data.all_subjects:
-        for kw in _CORE_SUBJECT_KEYWORDS:
-            if kw in subj.name:
-                core_subject_ids.add(subj.id)
-                break
-
-    # Build class_id -> grade level map
-    class_grade: dict[int, int] = {}
-    for cg in data.class_groups:
-        if cg.grade and cg.grade.level >= MIN_GRADE_LEVEL:
-            class_grade[cg.id] = cg.grade.level
-
-    if not class_grade:
-        return  # No high-school classes
-
-    # Identify מגמות subject IDs
-    megamot_keywords = {"מגמות", "מגמה"}
-    megamot_subject_ids: set[int] = set()
-    for subj in data.all_subjects:
-        for kw in megamot_keywords:
-            if kw in subj.name:
-                megamot_subject_ids.add(subj.id)
-                break
-
-    # Build class_id -> set of relevant cluster IDs (core subjects + מגמות only)
-    class_clusters: dict[int, set[int]] = {}
-    for cluster in data.clusters:
-        # Only include clusters whose subject is core (math/English) or מגמות
-        if cluster.subject_id not in core_subject_ids and cluster.subject_id not in megamot_subject_ids:
-            continue
-        for src_class in cluster.source_classes:
-            if src_class.id in class_grade:
-                class_clusters.setdefault(src_class.id, set()).add(cluster.id)
-
-    # For each high-school class, each day: sum of core + מגמה vars >= 1
-    for class_id in class_grade:
-        cluster_ids = class_clusters.get(class_id, set())
-
-        for day in data.days:
-            day_core_vars: list = []
-
-            # Regular lessons: English or Math for this class on this day
-            for key, var in variables.x.items():
-                c_id, s_id, _t_id, d, _p = key
-                if c_id == class_id and d == day and s_id in core_subject_ids:
-                    day_core_vars.append(var)
-
-            # Track vars: only from core/מגמות clusters
-            for cl_id in cluster_ids:
-                for cluster in data.clusters:
-                    if cluster.id != cl_id:
-                        continue
-                    for track in cluster.tracks:
-                        if track.teacher_id is None:
-                            continue
-                        for key, var in variables.x_track.items():
-                            tr_id, d, _p = key
-                            if tr_id == track.id and d == day:
-                                day_core_vars.append(var)
-
-            if day_core_vars:
-                model.add(sum(day_core_vars) >= 1)
 
 
 # ---------------------------------------------------------------------------

@@ -1,12 +1,12 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, Calendar, Clock } from "lucide-react";
+import { Plus, Pencil, Trash2, Calendar, Clock, BookOpen } from "lucide-react";
 import toast from "react-hot-toast";
 import { useSchoolStore } from "@/stores/schoolStore";
 import { fetchGrades, createGrade, updateGrade, deleteGrade } from "@/api/grades";
 import { fetchClasses, createClass, updateClass, deleteClass } from "@/api/classes";
 import { fetchTeachers } from "@/api/teachers";
-import { fetchRequirements } from "@/api/subjects";
+import { fetchRequirements, fetchSubjects } from "@/api/subjects";
 import { fetchGroupingClusters } from "@/api/groupings";
 import { fetchConstraints, createConstraint, updateConstraint, deleteConstraint } from "@/api/constraints";
 import { computeAllClassHours } from "@/lib/classHours";
@@ -156,6 +156,236 @@ function GradeEndOfDayDialog({
         <EndOfDayGrid grid={grid} onChange={setGrid} />
         <DialogFooter>
           <Button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>{saveMut.isPending ? "שומר..." : "שמור"}</Button>
+          {constraint && <Button variant="destructive" onClick={() => removeMut.mutate()} disabled={removeMut.isPending}>הסר</Button>}
+          <Button variant="outline" onClick={onClose}>ביטול</Button>
+        </DialogFooter>
+      </div>
+    </Dialog>
+  );
+}
+
+// ─── Grade Daily Core Subjects Dialog ────────────────────
+// Select subjects/clusters that MUST appear every school day for every class in the grade.
+// A cluster (e.g., "מגמות יא") groups multiple tracks — selecting it means
+// "any one of its tracks counts" (since each class only gets one track anyway).
+function GradeCoreSubjectsDialog({
+  open, onClose, grade, schoolId, constraint,
+}: {
+  open: boolean; onClose: () => void; grade: Grade; schoolId: number; constraint: Constraint | undefined;
+}) {
+  const qc = useQueryClient();
+  const { data: subjects = [] } = useQuery({
+    queryKey: ["subjects", schoolId],
+    queryFn: () => fetchSubjects(schoolId),
+    enabled: open,
+  });
+  const { data: clusters = [] } = useQuery({
+    queryKey: ["grouping-clusters", schoolId],
+    queryFn: () => fetchGroupingClusters(schoolId),
+    enabled: open,
+  });
+  const { data: classes = [] } = useQuery({
+    queryKey: ["classes", schoolId],
+    queryFn: () => fetchClasses(schoolId),
+    enabled: open,
+  });
+
+  const [selectedSubjects, setSelectedSubjects] = useState<Set<number>>(new Set());
+  const [selectedClusters, setSelectedClusters] = useState<Set<number>>(new Set());
+  const [hardOrSoft, setHardOrSoft] = useState<"HARD" | "SOFT">("HARD");
+  const [weight, setWeight] = useState<number>(80);
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    const subIds = (constraint?.parameters?.subject_ids as number[] | undefined) ?? [];
+    const clIds = (constraint?.parameters?.cluster_ids as number[] | undefined) ?? [];
+    setSelectedSubjects(new Set(subIds));
+    setSelectedClusters(new Set(clIds));
+    setHardOrSoft((constraint?.type as "HARD" | "SOFT") ?? "HARD");
+    setWeight(constraint?.weight ?? 80);
+    setQuery("");
+  }, [open, constraint]);
+
+  // Clusters whose source classes belong to this grade
+  const gradeClusterIds = useMemo(() => {
+    const classesInGrade = new Set(classes.filter((c) => c.grade_id === grade.id).map((c) => c.id));
+    const ids = new Set<number>();
+    for (const cl of clusters) {
+      if (cl.source_class_ids.some((cid) => classesInGrade.has(cid))) {
+        ids.add(cl.id);
+      }
+    }
+    return ids;
+  }, [clusters, classes, grade.id]);
+
+  const filteredSubjects = useMemo(() => {
+    const q = query.trim();
+    return subjects
+      .filter((s) => !q || s.name.includes(q))
+      .sort((a, b) => a.name.localeCompare(b.name, "he"));
+  }, [subjects, query]);
+
+  const filteredClusters = useMemo(() => {
+    const q = query.trim();
+    return clusters
+      .filter((c) => gradeClusterIds.has(c.id))
+      .filter((c) => !q || c.name.includes(q))
+      .sort((a, b) => a.name.localeCompare(b.name, "he"));
+  }, [clusters, gradeClusterIds, query]);
+
+  const saveMut = useMutation({
+    mutationFn: async () => {
+      if (selectedSubjects.size === 0 && selectedClusters.size === 0) {
+        if (constraint) await deleteConstraint(constraint.id);
+        return;
+      }
+      const payload = {
+        school_id: schoolId,
+        name: `מקצועות ליבה — שכבה ${grade.name}`,
+        description: null,
+        category: "CLASS" as const,
+        type: hardOrSoft,
+        weight: hardOrSoft === "HARD" ? 100 : weight,
+        rule_type: "DAILY_CORE_SUBJECTS" as const,
+        parameters: {
+          subject_ids: Array.from(selectedSubjects).sort((a, b) => a - b),
+          cluster_ids: Array.from(selectedClusters).sort((a, b) => a - b),
+        },
+        target_type: "GRADE" as const,
+        target_id: grade.id,
+        is_active: true,
+        notes: null,
+      };
+      if (constraint) await updateConstraint(constraint.id, payload);
+      else await createConstraint(payload as Omit<Constraint, "id" | "created_at">);
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["constraints", schoolId] }); toast.success("נשמר"); onClose(); },
+    onError: () => toast.error("שגיאה"),
+  });
+
+  const removeMut = useMutation({
+    mutationFn: () => deleteConstraint(constraint!.id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["constraints", schoolId] }); toast.success("הוסר"); onClose(); },
+  });
+
+  const toggleSubject = (id: number) => {
+    const next = new Set(selectedSubjects);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelectedSubjects(next);
+  };
+
+  const toggleCluster = (id: number) => {
+    const next = new Set(selectedClusters);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelectedClusters(next);
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose}>
+      <DialogHeader>
+        <DialogTitle>
+          מקצועות ליבה — שכבה {grade.name}
+          {constraint && <span className="text-xs text-muted-foreground mr-2">#{constraint.id}</span>}
+        </DialogTitle>
+      </DialogHeader>
+      <div className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          בחר מקצועות/הקבצות שחייבים להופיע בכל יום לימודים. לפחות שיעור אחד מהרשימה יופיע בכל יום לכל כיתה בשכבה.
+          <br />
+          הקבצות (כמו "מגמות") מייצגות קבוצה של מקצועות — בחירה בהקבצה = אחד מהשיעורים שלה מספיק.
+        </p>
+
+        <div className="flex items-center gap-3 border-b pb-2">
+          <Label className="text-sm">סוג:</Label>
+          <button
+            type="button"
+            onClick={() => setHardOrSoft(hardOrSoft === "HARD" ? "SOFT" : "HARD")}
+            className="cursor-pointer"
+          >
+            <Badge variant={hardOrSoft === "HARD" ? "default" : "outline"}>
+              {hardOrSoft === "HARD" ? "חובה" : "רך"}
+            </Badge>
+          </button>
+          {hardOrSoft === "SOFT" && (
+            <div className="flex items-center gap-2">
+              <Label className="text-xs">משקל:</Label>
+              <input type="range" min={10} max={100} step={5} value={weight} onChange={(e) => setWeight(Number(e.target.value))} className="w-24" />
+              <span className="text-xs w-6">{weight}</span>
+            </div>
+          )}
+        </div>
+
+        <Input
+          placeholder="חפש מקצוע או הקבצה..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+
+        <div className="max-h-[400px] overflow-y-auto border rounded-md p-2 space-y-3">
+          {filteredClusters.length > 0 && (
+            <div>
+              <div className="text-xs font-semibold text-muted-foreground px-2 py-1 sticky top-0 bg-card">
+                הקבצות ({filteredClusters.length})
+              </div>
+              {filteredClusters.map((cl) => {
+                const selected = selectedClusters.has(cl.id);
+                return (
+                  <label
+                    key={`cl-${cl.id}`}
+                    className={`flex items-center gap-2 p-2 rounded cursor-pointer hover:bg-muted ${selected ? "bg-primary/5" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() => toggleCluster(cl.id)}
+                      className="rounded border-border"
+                    />
+                    <span className="text-sm font-medium">{cl.name}</span>
+                    <span className="text-xs text-muted-foreground">— {cl.tracks?.length ?? 0} מסלולים</span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+          {filteredSubjects.length > 0 && (
+            <div>
+              <div className="text-xs font-semibold text-muted-foreground px-2 py-1 sticky top-0 bg-card">
+                מקצועות ({filteredSubjects.length})
+              </div>
+              {filteredSubjects.map((s) => {
+                const selected = selectedSubjects.has(s.id);
+                return (
+                  <label
+                    key={`s-${s.id}`}
+                    className={`flex items-center gap-2 p-2 rounded cursor-pointer hover:bg-muted ${selected ? "bg-primary/5" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() => toggleSubject(s.id)}
+                      className="rounded border-border"
+                    />
+                    <span className="text-sm">{s.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+          {filteredSubjects.length === 0 && filteredClusters.length === 0 && (
+            <p className="text-sm text-muted-foreground text-center py-4">אין פריטים תואמים</p>
+          )}
+        </div>
+
+        <div className="text-xs text-muted-foreground">
+          נבחרו: <span className="font-semibold text-foreground">{selectedSubjects.size}</span> מקצועות,
+          <span className="font-semibold text-foreground mr-1">{selectedClusters.size}</span> הקבצות
+        </div>
+
+        <DialogFooter>
+          <Button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
+            {saveMut.isPending ? "שומר..." : "שמור"}
+          </Button>
           {constraint && <Button variant="destructive" onClick={() => removeMut.mutate()} disabled={removeMut.isPending}>הסר</Button>}
           <Button variant="outline" onClick={onClose}>ביטול</Button>
         </DialogFooter>
@@ -444,6 +674,7 @@ export default function ClassesPage() {
   const [editingClass, setEditingClass] = useState<ClassGroup | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ type: "grade" | "class"; id: number; name: string } | null>(null);
   const [eodGrade, setEodGrade] = useState<Grade | null>(null);
+  const [coreGrade, setCoreGrade] = useState<Grade | null>(null);
   const [previewClass, setPreviewClass] = useState<{ id: number; name: string } | null>(null);
 
   const { data: grades = [] } = useQuery({ queryKey: ["grades", schoolId], queryFn: () => fetchGrades(schoolId!), enabled: !!schoolId });
@@ -474,6 +705,15 @@ export default function ClassesPage() {
     return m;
   }, [constraints]);
 
+  const coreByGrade = useMemo(() => {
+    const m: Record<number, Constraint> = {};
+    for (const c of constraints) {
+      if (c.rule_type === "DAILY_CORE_SUBJECTS" && c.is_active && c.target_type === "GRADE" && c.target_id)
+        m[c.target_id] = c;
+    }
+    return m;
+  }, [constraints]);
+
 
   const deleteMut = useMutation({
     mutationFn: () => deleteTarget!.type === "grade" ? deleteGrade(deleteTarget!.id) : deleteClass(deleteTarget!.id),
@@ -493,8 +733,24 @@ export default function ClassesPage() {
               <div className="flex items-center gap-3">
                 <h2 className="text-xl font-bold">שכבה {grade.name}</h2>
                 <Badge variant="secondary">{gradeClasses.length} כיתות</Badge>
+                {coreByGrade[grade.id] && (
+                  <Badge variant="outline" className="text-[10px]">
+                    {(() => {
+                      const p = coreByGrade[grade.id].parameters ?? {};
+                      const nSubj = (p.subject_ids as number[] | undefined)?.length ?? 0;
+                      const nClst = (p.cluster_ids as number[] | undefined)?.length ?? 0;
+                      const parts: string[] = [];
+                      if (nSubj) parts.push(`${nSubj} מקצועות`);
+                      if (nClst) parts.push(`${nClst} הקבצות`);
+                      return parts.join(" + ") + " ליבה";
+                    })()}
+                  </Badge>
+                )}
               </div>
               <div className="flex items-center gap-1">
+                <Button variant="ghost" size="icon" title="מקצועות ליבה לשכבה (חובה בכל יום)" onClick={() => setCoreGrade(grade)}>
+                  <BookOpen className={`h-4 w-4 ${coreByGrade[grade.id] ? "text-primary" : "text-muted-foreground"}`} />
+                </Button>
                 <Button variant="ghost" size="icon" title="אילוץ סוף יום לשכבה" onClick={() => setEodGrade(grade)}>
                   <Clock className="h-4 w-4 text-amber-600" />
                 </Button>
@@ -636,6 +892,12 @@ export default function ClassesPage() {
         <GradeEndOfDayDialog
           open={!!eodGrade} onClose={() => setEodGrade(null)}
           grade={eodGrade} schoolId={schoolId} constraint={eodByGrade[eodGrade.id]}
+        />
+      )}
+      {coreGrade && (
+        <GradeCoreSubjectsDialog
+          open={!!coreGrade} onClose={() => setCoreGrade(null)}
+          grade={coreGrade} schoolId={schoolId} constraint={coreByGrade[coreGrade.id]}
         />
       )}
       <ConfirmDialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={() => deleteMut.mutate()}

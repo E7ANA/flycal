@@ -196,7 +196,8 @@ export type RuleType =
   | "HOMEROOM_EARLY"
   | "CLASS_END_TIME"
   | "TEACHER_DAY_END_LIMIT"
-  | "TEACHER_PREFERRED_FREE_DAY";
+  | "TEACHER_PREFERRED_FREE_DAY"
+  | "DAILY_CORE_SUBJECTS";
 
 export interface Constraint {
   id: number;

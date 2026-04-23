@@ -65,6 +65,10 @@ class RuleType(str, enum.Enum):
     TEACHER_DAY_END_LIMIT = "TEACHER_DAY_END_LIMIT"
     # Teacher preferred free day
     TEACHER_PREFERRED_FREE_DAY = "TEACHER_PREFERRED_FREE_DAY"
+    # Daily core subjects — each day must contain at least one of the listed subjects.
+    # parameters: { "subject_ids": [int, ...] }
+    # target: GRADE (applies to all classes in the grade) or CLASS
+    DAILY_CORE_SUBJECTS = "DAILY_CORE_SUBJECTS"
 
 
 class TargetType(str, enum.Enum):

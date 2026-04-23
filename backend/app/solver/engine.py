@@ -421,8 +421,8 @@ def _diagnose_infeasibility(
 
     log = logging.getLogger("solver.diagnosis")
 
-    _QUICK_TIME = 5  # seconds per test
-    _QUICK_WORKERS = 4
+    _QUICK_TIME = 30  # seconds per test — was 5, too short for realistic models
+    _QUICK_WORKERS = 8
 
     def _quick_solve(model: cp_model.CpModel) -> int:
         solver = cp_model.CpSolver()
@@ -678,10 +678,122 @@ def _diagnose_infeasibility(
                 f"נסו להגדיל את המגבלה או לשנות ל-SOFT."
             )
 
+        if rt == "CLASS_END_TIME":
+            if target_id:
+                cname_v = _cname(target_id) if c.category == "CLASS" else f"שכבה #{target_id}"
+                return (
+                    f"אילוץ שעת סיום לכיתה/שכבה {cname_v} מצמצם את הסלוטים הזמינים "
+                    f"מתחת לשעות הנדרשות. נסו לאפשר שעות סיום מאוחרות יותר או לבטל."
+                )
+            return (
+                f"אילוץ שעת סיום סותר את נפח השעות הנדרש. נסו לשנות ל-SOFT."
+            )
+
+        if rt == "MIN_TEACHING_HOURS_PER_DAY":
+            min_h = params.get("min", "?")
+            if target_id:
+                tname = _tname(target_id)
+                t_hours_map, _, _ = _teacher_hours_and_availability()
+                total_h = t_hours_map.get(target_id, 0)
+                return (
+                    f"למורה {tname} יש רק {total_h} שעות, אבל דרישה של מינימום {min_h} "
+                    f"ליום תדרוש שכל יום עבודה יכיל לפחות {min_h} שעות. "
+                    f"ייתכן שאין מספיק ימים עם הנפח הזה. נסו להוריד את המינימום."
+                )
+            return f"אילוץ מינימום {min_h} שעות ליום אינו אפשרי בנפח הנוכחי."
+
+        if rt == "TEACHER_DAY_END_LIMIT":
+            num_days = params.get("num_days", "?")
+            end_period = params.get("end_period", "?")
+            if target_id:
+                tname = _tname(target_id)
+                return (
+                    f"למורה {tname} מבוקש לסיים עד שעה {end_period} ב-{num_days} ימים. "
+                    f"השילוב של מגבלה זו עם יתר השעות שלה לא אפשרי. "
+                    f"נסו להגדיל את שעת הסיום, להקטין את מספר הימים, או לשנות ל-SOFT."
+                )
+            return f"אילוץ סיום מוקדם סותר. נסו לשנות ל-SOFT."
+
+        if rt == "TEACHER_PREFERRED_FREE_DAY":
+            preferred = params.get("preferred_days", [])
+            if target_id:
+                tname = _tname(target_id)
+                return (
+                    f"למורה {tname} הוגדרו ימים חופשיים אפשריים: {preferred}. "
+                    f"נפח השעות הכולל לא מתאפשר עם ההגבלה. "
+                    f"נסו להוסיף ימי עבודה אפשריים."
+                )
+            return f"אילוץ יום חופשי למורה סותר."
+
+        if rt in ("MAX_GAPS_PER_DAY", "MAX_GAPS_PER_WEEK"):
+            max_gaps = params.get("max", "?")
+            period_label = "יום" if rt == "MAX_GAPS_PER_DAY" else "שבוע"
+            entity = ""
+            if target_id and c.category == "TEACHER":
+                entity = f"למורה {_tname(target_id)}"
+            elif target_id and c.category == "CLASS":
+                entity = f"לכיתה {_cname(target_id)}"
+            return (
+                f"מגבלת {max_gaps} חלונות ל{period_label} {entity} סותרת — "
+                f"לא ניתן לשבץ בלי חריגה. נסו להגדיל את המגבלה או לשנות ל-SOFT."
+            )
+
+        if rt == "BALANCED_DAILY_LOAD":
+            max_diff = params.get("max_difference", "?")
+            if target_id:
+                tname = _tname(target_id)
+                return (
+                    f"דרישה לאיזון יומי (הפרש מקסימלי {max_diff} שעות בין ימים) "
+                    f"עבור {tname} לא תואמת את נפח השעות והסלוטים הזמינים. "
+                    f"נסו להגדיל את ההפרש המותר."
+                )
+            return f"דרישת איזון יומי לא אפשרית. נסו לשנות ל-SOFT."
+
+        if rt == "SAME_DAY_GROUPING":
+            return (
+                f"דרישה ששעות מקצוע '{target_id}' יהיו באותו יום — "
+                f"לא מספיק סלוטים עוקבים באותו יום. נסו לשנות ל-SOFT."
+            )
+
+        if rt == "NOT_SAME_DAY_AS":
+            other = params.get("other_subject_id", "?")
+            return (
+                f"דרישה ששני מקצועות לא יהיו באותו יום — במערכת הנוכחית "
+                f"אין מספיק ימים פנויים לפצל ביניהם. נסו לשנות ל-SOFT."
+            )
+
+        if rt == "NO_CONSECUTIVE_DAYS":
+            return (
+                f"דרישה למנוע ימים רצופים למקצוע — לא ניתן לפזר את כל השעות "
+                f"בלי לחזור לימים רצופים. נסו לשנות ל-SOFT."
+            )
+
+        if rt in ("SYNC_TRACKS", "SYNC_TEACHER_CLASSES"):
+            return (
+                f"אילוץ סנכרון הקבצה/כיתות — דורש חפיפה מלאה בלוחות הזמנים. "
+                f"בדקו שלכל המורים ביחידה יש מספיק סלוטים משותפים."
+            )
+
+        if rt == "PREFER_TIME_RANGE":
+            day = params.get("day", "ALL")
+            fp = params.get("from_period", "?")
+            tp = params.get("to_period", "?")
+            day_label = "כל הימים" if day == "ALL" else _day_he(day)
+            return (
+                f"העדפת טווח שעות {fp}-{tp} ב{day_label} — "
+                f"אם האילוץ HARD, אין מספיק סלוטים בטווח. שנו ל-SOFT."
+            )
+
+        if rt == "AVOID_LAST_PERIOD":
+            return (
+                f"דרישה להימנע מהשעה האחרונה עבור '{target_id}' סותרת — "
+                f"יש שעות רבות מדי לפזר מחוץ לשעה האחרונה. נסו SOFT."
+            )
+
         # Generic fallback
         return (
             f"אילוץ #{c.id} '{c.name}' (סוג {rt}) סותר את אילוצי המערכת. "
-            f"נסו לשנות ל-SOFT או לבטל זמנית."
+            f"פרמטרים: {params}. נסו לשנות ל-SOFT או לבטל זמנית."
         )
 
     conflicts: list[InfeasibilityConflict] = []
@@ -757,7 +869,8 @@ def _diagnose_infeasibility(
                 continue
 
             # All tracks must be synced — check if teachers have enough common free slots
-            teacher_ids = [t.teacher_id for t in cluster.tracks if t.teacher_id is not None]
+            tracks_with_teachers = [t for t in cluster.tracks if t.teacher_id is not None]
+            teacher_ids = [t.teacher_id for t in tracks_with_teachers]
             if len(teacher_ids) < 2:
                 continue
 
@@ -767,7 +880,8 @@ def _diagnose_infeasibility(
                 blocked = data.teacher_blocked_slots.get(tid, set())
                 common_slots -= blocked
 
-            needed_hours = primary_tracks[0].hours_per_week if primary_tracks else 0
+            # Sync means all tracks occupy the same slots — need max(hours) slots available
+            needed_hours = max((t.hours_per_week for t in tracks_with_teachers), default=0)
             if needed_hours > len(common_slots):
                 teacher_names = ", ".join(_tname(tid) for tid in teacher_ids)
                 blocked_details = []
@@ -1046,23 +1160,76 @@ def _diagnose_infeasibility(
                             )
                     elif func_name == "max_days_by_frontal":
                         teacher_frontal = brain_module._compute_teacher_frontal(data)
-                        for tid, frontal in sorted(teacher_frontal.items(), key=lambda x: -x[1]):
-                            # Max days formula: roughly frontal/6 rounded up, capped
-                            # Show teachers that are tight
-                            if frontal > 0:
-                                extra_detail += f"\n  - {_tname(tid)}: {frontal} שעות פרונטליות"
-                        if extra_detail:
-                            extra_detail = "\nמורים עם שעות פרונטליות:" + extra_detail
+                        # Show TOP 5 teachers with highest frontal hours — likely culprits
+                        top_teachers = sorted(
+                            [(tid, f) for tid, f in teacher_frontal.items() if f > 0],
+                            key=lambda x: -x[1]
+                        )[:5]
+                        if top_teachers:
+                            extra_detail = "\nמורים עם הכי הרבה שעות פרונטליות (חשודים כגורמים):\n  - " + "\n  - ".join(
+                                f"{_tname(tid)}: {frontal} שעות" for tid, frontal in top_teachers
+                            )
+                            extra_detail += "\nשקלו להעביר שעות למורה אחר או להוסיף יום עבודה."
                     elif func_name == "oz_la_tmura":
-                        extra_detail = (
-                            "\nכלל זה מגביל חלונות (שעות ריקות) ליום לפי נפח שעות פרונטליות. "
-                            "ייתכן שלמורים מסוימים אין מספיק גמישות ביום."
-                        )
+                        t_hours_map, t_avail_map, _ = _teacher_hours_and_availability()
+                        teacher_frontal = brain_module._compute_teacher_frontal(data)
+                        # Teachers with very tight ratio (hours/avail >= 0.8)
+                        tight_teachers = []
+                        for tid, h in t_hours_map.items():
+                            avail = t_avail_map.get(tid, 0)
+                            if avail > 0 and h / avail >= 0.8:
+                                frontal = teacher_frontal.get(tid, 0)
+                                tight_teachers.append(f"{_tname(tid)}: {h} שעות / {avail} סלוטים ({frontal} פרונטליות)")
+                        if tight_teachers:
+                            extra_detail = "\nמורים עם גמישות נמוכה:\n  - " + "\n  - ".join(tight_teachers[:5])
+                            extra_detail += "\nכלל זה מגביל חלונות לפי שעות פרונטליות — נסו להפחית עומס."
+                        else:
+                            extra_detail = (
+                                "\nכלל זה מגביל חלונות (שעות ריקות) ליום לפי נפח שעות פרונטליות. "
+                                "ייתכן שלמורים מסוימים אין מספיק גמישות ביום."
+                            )
                     elif func_name == "max_consecutive_frontal":
-                        extra_detail = (
-                            "\nכלל זה מגביל ל-6 שעות פרונטליות רצופות. "
-                            "ייתכן שאין מספיק הפסקות/ישיבות לפצל את הבלוקים."
-                        )
+                        # Count teachers with >6 hours per day potential
+                        t_hours_map, _, _ = _teacher_hours_and_availability()
+                        days_count = len(data.days)
+                        heavy_teachers = [
+                            (tid, h) for tid, h in t_hours_map.items()
+                            if days_count > 0 and h / days_count > 5.5
+                        ]
+                        if heavy_teachers:
+                            extra_detail = "\nמורים שעלולים לחרוג מ-6 פרונטליות רצופות:\n  - " + "\n  - ".join(
+                                f"{_tname(tid)}: ממוצע {h/days_count:.1f} שעות/יום" for tid, h in heavy_teachers[:5]
+                            )
+                        else:
+                            extra_detail = (
+                                "\nכלל זה מגביל ל-6 שעות פרונטליות רצופות. "
+                                "ייתכן שאין מספיק הפסקות/ישיבות לפצל את הבלוקים."
+                            )
+                    elif func_name == "always_double":
+                        # List subjects with always_double=True
+                        double_subjects = [s.name for s in data.all_subjects if getattr(s, "always_double", False)]
+                        if double_subjects:
+                            extra_detail = f"\nמקצועות עם 'חובה כפולה': {', '.join(double_subjects[:10])}"
+                            extra_detail += "\nשקלו לשנות חלק מהם ל-'העדפה כפולה' (SOFT)."
+                    elif func_name == "homeroom_daily":
+                        # List classes with daily homeroom requirement
+                        daily_classes = [cg.name for cg in data.class_groups if getattr(cg, "homeroom_daily_required", False)]
+                        if daily_classes:
+                            extra_detail = f"\nכיתות עם מחנכת יומית: {', '.join(daily_classes)}"
+                            extra_detail += "\nשקלו להסיר את הדרישה לחלק מהכיתות."
+                    elif func_name == "same_day_consecutive":
+                        # Subjects with many hours per week per class — most likely culprits
+                        candidates = []
+                        for req in data.requirements:
+                            if not req.is_grouped and req.teacher_id and req.hours_per_week >= 3:
+                                subj = req.subject.name if req.subject else f"#{req.subject_id}"
+                                candidates.append(f"{subj} ל{_cname(req.class_group_id)} ({req.hours_per_week}ש)")
+                        if candidates:
+                            extra_detail = "\nדרישות עם 3+ שעות (מועמדות לרצף):\n  - " + "\n  - ".join(candidates[:5])
+                    elif func_name == "max_consecutive_meetings":
+                        if data.meetings:
+                            extra_detail = f"\nיש {len(data.meetings)} ישיבות במערכת."
+                            extra_detail += "\nבדוק אם יש מורה שמשתתפת בישיבות רבות מדי."
 
                     conflicts.append(InfeasibilityConflict(
                         source="brain_rule",
@@ -1125,8 +1292,71 @@ def _diagnose_infeasibility(
             details=details,
         ))
 
+    # ── Phase 5: Generate actionable recommendations ───────────────────
+    # For each conflict, suggest a concrete action the user can take.
+    recommendations = _generate_recommendations(conflicts, data)
+    if recommendations:
+        conflicts.append(InfeasibilityConflict(
+            source="analysis",
+            name="💡 המלצות לתיקון",
+            details=recommendations,
+        ))
+
     log.info(f"Diagnosis complete: {len(conflicts)} conflicts found")
     return conflicts
+
+
+def _generate_recommendations(
+    conflicts: list[InfeasibilityConflict],
+    data: SolverData,
+) -> str:
+    """Translate conflicts into concrete fix suggestions."""
+    if not conflicts:
+        return ""
+
+    suggestions: list[str] = []
+    seen: set[str] = set()
+
+    def _add(text: str):
+        if text not in seen:
+            seen.add(text)
+            suggestions.append(text)
+
+    for c in conflicts:
+        if c.source == "system":
+            if "עומס יתר" in c.name or "אין חפיפה" in c.name:
+                _add("הסירו חסימות אצל המורה הרלוונטי או פצלו את הנפח בין מורים נוספים")
+                _add("שקלו להוסיף יום עבודה למורה (שחרור חסימת יום)")
+            if "אפס גמישות" in c.name:
+                _add("הוסיפו שעה אחת לפחות לשכבה כדי לקבל גמישות שיבוץ")
+            if "ישיבה" in c.name and "עומס" in c.name:
+                _add("הקטינו את מספר השעות השבועיות של הישיבה, או הסירו מורה מהישיבה")
+            if "הקבצה" in c.name:
+                _add("הסירו חסימה ממורה אחד לפחות בהקבצה, או הוסיפו מורה שיש לו סלוטים פנויים")
+
+        if c.source == "user_constraint":
+            rt = c.rule_type or ""
+            if "BLOCK_" in rt:
+                _add("שנו את האילוץ מ-HARD ל-SOFT כדי שהסולבר יוכל לחרוג במקרה הצורך")
+                _add("בטלו זמנית את האילוץ (toggle off) כדי לבדוק אם הוא הגורם")
+            elif "MAX_" in rt:
+                _add("הגדילו את ערך המקסימום בפרמטרים של האילוץ")
+                _add("שנו את האילוץ ל-SOFT עם משקל גבוה")
+            elif "MIN_" in rt:
+                _add("הקטינו את ערך המינימום בפרמטרים של האילוץ")
+            elif "REQUIRE_CONSECUTIVE" in rt:
+                _add("שנו את 'חובה רצוף' ל-'העדפה רצוף' במקצועות הבעייתיים")
+
+        if c.source == "brain_rule":
+            if "יום רציף" in c.name:
+                _add("בדקו כיתות ב-100% קיבולת — הוסיפו שעה לשכבה או הפחיתו דרישה")
+            if "שעות כפולות" in c.name:
+                _add("הפכו 'חובה כפולה' ל-'העדפה כפולה' במקצועות בעייתיים")
+
+    if not suggestions:
+        return ""
+
+    return "פעולות אפשריות:\n  • " + "\n  • ".join(suggestions[:8])
 
 
 def _apply_warm_start(
@@ -1341,18 +1571,39 @@ def solve(
     _step(1, "loading_data")
     data = load_solver_data(db, school_id)
 
-    # Step 2: Validate
+    # Step 2: Validate (structural data checks + conflict detection)
     _step(2, "validating")
     errors = validate_data(data)
+
+    # Also run structural conflict detection — catches impossible setups
+    # (teacher blocked all days, contradicting HARD rules, cluster without
+    # overlap, etc.) BEFORE we spend 5 minutes solving.
+    structural_diagnosis: list[InfeasibilityConflict] = []
+    try:
+        from app.solver.conflict_detector import detect_conflicts
+        for issue in detect_conflicts(data, db, school_id):
+            if issue.level == "error":
+                errors.append(issue.message)
+                structural_diagnosis.append(InfeasibilityConflict(
+                    source="system",
+                    name="בעיה מבנית מזוהה",
+                    details=issue.message,
+                ))
+    except Exception:
+        # Non-fatal — we'll still run the solver
+        pass
+
     if errors:
         if job_id:
             _set_progress(job_id, done=True, result_status="INFEASIBLE",
                           result_message="שגיאות בנתונים")
+        msg = "שגיאות בנתונים:\n• " + "\n• ".join(errors)
         return SolveResult(
             status=SolutionStatus.INFEASIBLE,
             solutions=[],
             solve_time=time.time() - start_time,
-            message="שגיאות בנתונים: " + "; ".join(errors),
+            message=msg,
+            diagnosis=structural_diagnosis if structural_diagnosis else None,
         )
 
     # Step 3: Build model
@@ -1436,116 +1687,56 @@ def solve(
         sol_status = SolutionStatus.FEASIBLE
     elif status == cp_model.INFEASIBLE:
         _step(8, "diagnosing")
-        from app.solver import brain as brain_module
-        from app.models.constraint import Constraint as ConstraintModel
-        from app.solver.constraint_compiler import _compile_one, _clone_constraint_with_target, _expand_global_defaults
-        msg_parts: list[str] = []
 
-        def _quick(m, timeout=10):
-            s = cp_model.CpSolver()
-            s.parameters.max_time_in_seconds = timeout
-            s.parameters.num_workers = 8
-            return s.solve(m)
+        # Run the full diagnosis function (replaces the previous inline version).
+        # This function is much more thorough: detects capacity issues, tests rule-
+        # type groups, cross-type pairs, brain rules, and produces detailed Hebrew
+        # explanations per constraint.
+        try:
+            diagnosis = _diagnose_infeasibility(data, db, school_id, job_id=job_id)
+        except Exception as e:
+            import logging
+            logging.getLogger("solver").exception("Diagnosis failed")
+            diagnosis = [InfeasibilityConflict(
+                source="system",
+                name="אבחון נכשל",
+                details=f"תהליך האבחון עצמו נכשל: {e}",
+            )]
 
-        # 1) System only
-        m0 = cp_model.CpModel()
-        v0 = create_variables(m0, data)
-        add_system_constraints(m0, data, v0)
-        if _quick(m0) == cp_model.INFEASIBLE:
-            msg_parts.append("אילוצי מערכת בלבד = INFEASIBLE (בעיה בנתונים/נעילות)")
+        # Also augment with structural conflicts (teacher blocked all days, etc.)
+        try:
+            from app.solver.conflict_detector import detect_conflicts
+            struct_issues = detect_conflicts(data, db, school_id)
+            for issue in struct_issues:
+                if issue.level == "error":
+                    diagnosis.insert(0, InfeasibilityConflict(
+                        source="system",
+                        name="בעיה מבנית: " + issue.message.split(".")[0][:60],
+                        details=issue.message,
+                    ))
+        except Exception:
+            pass  # Non-fatal — structural check is bonus
+
+        # Build user-visible message from diagnosis
+        if diagnosis:
+            msg_lines = []
+            for d in diagnosis[:8]:  # Top 8 most important
+                prefix = {
+                    "system": "🔴 מערכת",
+                    "user_constraint": "⚙️ אילוץ",
+                    "brain_rule": "🧠 כלל חכם",
+                    "analysis": "📊 ניתוח",
+                }.get(d.source, "•")
+                msg_lines.append(f"{prefix}: {d.name}")
+                if d.details:
+                    # Indent details
+                    for dl in d.details.split("\n"):
+                        if dl.strip():
+                            msg_lines.append(f"   {dl.strip()}")
+            msg = "לא ניתן לפתור.\n\n" + "\n".join(msg_lines)
         else:
-            # 2) System + each user constraint WITH global expansion
-            active = db.query(ConstraintModel).filter(
-                ConstraintModel.school_id == school_id, ConstraintModel.is_active == True
-            ).all()
-            specific = [c for c in active if c.target_id is not None]
-            globals_ = [c for c in active if c.target_id is None]
+            msg = "לא ניתן לפתור — לא זוהתה סיבה ספציפית. בדוק את הנתונים."
 
-            for c in active:
-                mt = cp_model.CpModel()
-                vt = create_variables(mt, data)
-                add_system_constraints(mt, data, vt)
-                if c.target_id is not None:
-                    # Specific constraint — just compile it
-                    _compile_one(mt, data, vt, c)
-                else:
-                    # Global default — expand to all targets
-                    _expand_global_defaults(mt, data, vt, specific, [c])
-                if _quick(mt, 5) == cp_model.INFEASIBLE:
-                    detail = f"אילוץ #{c.id}: {c.name} ({c.rule_type.value})"
-                    # If global, drill down to find which target breaks
-                    if c.target_id is None:
-                        subj_names = {s.id: s.name for s in data.all_subjects}
-                        target_ids = set()
-                        if c.category == "SUBJECT":
-                            target_ids = {r.subject_id for r in data.requirements if not r.is_grouped}
-                            for cl in data.clusters:
-                                if cl.subject_id:
-                                    target_ids.add(cl.subject_id)
-                        for tid in sorted(target_ids):
-                            m2 = cp_model.CpModel()
-                            v2 = create_variables(m2, data)
-                            add_system_constraints(m2, data, v2)
-                            virtual = _clone_constraint_with_target(c, tid)
-                            _compile_one(m2, data, v2, virtual)
-                            if _quick(m2, 5) == cp_model.INFEASIBLE:
-                                tname = subj_names.get(tid, str(tid))
-                                # Find why — check teacher availability
-                                teacher_detail = ""
-                                for req in data.requirements:
-                                    if req.subject_id == tid and not req.is_grouped and req.teacher_id:
-                                        blocked = data.teacher_blocked_slots.get(req.teacher_id, set())
-                                        free_days = [d for d in data.days if not any(
-                                            dd == d for dd, p in blocked
-                                        )]
-                                        cls_name = next((cg.name for cg in data.class_groups if cg.id == req.class_group_id), "?")
-                                        t_name = req.teacher.name if req.teacher else str(req.teacher_id)
-                                        max_possible = len(free_days) * c.parameters.get("max", 99)
-                                        if req.hours_per_week > max_possible:
-                                            teacher_detail += (
-                                                f"\n  → {tname} ב{cls_name}: {req.hours_per_week} שעות, "
-                                                f"מורה {t_name} זמין/ה {len(free_days)} ימים × "
-                                                f"מקס {c.parameters.get('max')} = {max_possible} סלוטים"
-                                            )
-                                detail += f"\n  מקצוע בעייתי: {tname}{teacher_detail}"
-                    msg_parts.append(detail)
-
-            if not msg_parts:
-                # 3) User constraints pass individually — test compile_all together
-                m1 = cp_model.CpModel()
-                v1 = create_variables(m1, data)
-                add_system_constraints(m1, data, v1)
-                compile_all_constraints(m1, data, v1, db, school_id)
-                if _quick(m1) == cp_model.INFEASIBLE:
-                    msg_parts.append("שילוב אילוצי משתמש (לא אילוץ בודד)")
-                else:
-                    # 4) System + user + each brain function
-                    brain_funcs = [
-                        ("compact_school_day", "יום רציף ללא חלונות", brain_module._auto_compact_school_day),
-                        ("same_day_consecutive", "שעות רצופות באותו יום", brain_module._apply_same_day_consecutive),
-                        ("always_double", "שעות כפולות", brain_module._apply_always_double),
-                        ("max_consecutive_meetings", "מקסימום ישיבות רצופות", brain_module._apply_max_consecutive_meetings),
-                        ("max_days_by_frontal", "ימי עבודה לפי פרונטליות", None),
-                        ("max_consecutive_frontal", "מקסימום שעות פרונטליות רצופות", brain_module._apply_max_consecutive_frontal),
-                    ]
-                    for func_name, display_name, func in brain_funcs:
-                        mt = cp_model.CpModel()
-                        vt = create_variables(mt, data)
-                        add_system_constraints(mt, data, vt)
-                        compile_all_constraints(mt, data, vt, db, school_id)
-                        brain_module._NEXT_BRAIN_ID_HOLDER.clear()
-                        brain_module._NEXT_BRAIN_ID_HOLDER.append(-1)
-                        if func is not None:
-                            func(mt, data, vt)
-                        else:
-                            tf = brain_module._compute_teacher_frontal(data)
-                            brain_module._apply_max_days_by_frontal(mt, data, vt, tf)
-                        if _quick(mt) == cp_model.INFEASIBLE:
-                            msg_parts.append(f"כלל מוח: {display_name} ({func_name})")
-                    if not msg_parts:
-                        msg_parts.append("שילוב כללי מוח (לא כלל בודד)")
-
-        msg = "לא ניתן לפתור.\n\nגורמים:\n• " + "\n• ".join(msg_parts) if msg_parts else "לא ניתן לפתור"
         if job_id:
             _set_progress(job_id, done=True, result_status="INFEASIBLE",
                           result_message=msg)
@@ -1554,6 +1745,7 @@ def solve(
             solutions=[],
             solve_time=time.time() - start_time,
             message=msg,
+            diagnosis=diagnosis,
         )
     else:
         if job_id:

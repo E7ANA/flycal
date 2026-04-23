@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: logiclass-landing
+    env: static
+    buildCommand: echo "Static site"
+    staticPublishPath: ./
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: public, max-age=3600

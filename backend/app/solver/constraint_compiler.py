@@ -1985,6 +1985,103 @@ def _compile_teacher_preferred_free_day(
 
 
 # ---------------------------------------------------------------------------
+# DAILY_CORE_SUBJECTS — each day must contain at least one of the listed
+# subjects (for each target class).
+# ---------------------------------------------------------------------------
+
+def _compile_daily_core_subjects(
+    model: cp_model.CpModel, data: SolverData,
+    variables: SolverVariables, constraint: Constraint,
+) -> None:
+    """DAILY_CORE_SUBJECTS: each day for the target class(es) must have at
+    least one lesson from the listed subjects OR from any track of the
+    listed clusters.
+
+    Parameters:
+        subject_ids: list[int] — subject IDs considered "core" (direct lessons)
+        cluster_ids: list[int] — cluster IDs considered "core" (any track counts)
+
+    A cluster represents a group of subjects (e.g., "מגמות יא" contains
+    ביולוגיה/פיזיקה/קולנוע). Selecting the cluster means "any one of its
+    tracks" counts — the student always has one of them.
+
+    Target:
+        GRADE — applies to all classes in the grade
+        CLASS — applies to a single class
+        (unspecified) — applies to all classes
+    """
+    core_subject_ids = {int(sid) for sid in constraint.parameters.get("subject_ids", [])}
+    core_cluster_ids = {int(cid) for cid in constraint.parameters.get("cluster_ids", [])}
+
+    if not core_subject_ids and not core_cluster_ids:
+        return
+
+    is_hard = constraint.type == ConstraintType.HARD
+
+    # Resolve target classes
+    if constraint.target_type == "GRADE" and constraint.target_id:
+        targets = [cg.id for cg in data.class_groups if cg.grade_id == constraint.target_id]
+    elif constraint.target_type == "CLASS" and constraint.target_id:
+        targets = [constraint.target_id]
+    else:
+        targets = [cg.id for cg in data.class_groups]
+
+    if not targets:
+        return
+
+    # For each class, collect the clusters that apply (chosen + source contains the class)
+    class_core_clusters: dict[int, list] = {}
+    for cluster in data.clusters:
+        if cluster.id not in core_cluster_ids:
+            continue
+        for src_class in cluster.source_classes:
+            if src_class.id in targets:
+                class_core_clusters.setdefault(src_class.id, []).append(cluster)
+
+    for class_id in targets:
+        clusters_for_class = class_core_clusters.get(class_id, [])
+
+        for day in data.days:
+            day_core_vars = []
+
+            # Direct lessons: class × core subject × day
+            for key, var in variables.x.items():
+                c_id, s_id, _t_id, d, _p = key
+                if c_id == class_id and d == day and s_id in core_subject_ids:
+                    day_core_vars.append(var)
+
+            # Cluster tracks: any track from a chosen cluster counts
+            for cluster in clusters_for_class:
+                for track in cluster.tracks:
+                    if track.teacher_id is None:
+                        continue
+                    for key, var in variables.x_track.items():
+                        tr_id, d, _p = key
+                        if tr_id == track.id and d == day:
+                            day_core_vars.append(var)
+
+            if not day_core_vars:
+                continue
+
+            if is_hard:
+                model.add(sum(day_core_vars) >= 1)
+            else:
+                has_core = model.new_bool_var(
+                    f"core_day_{constraint.id}_c{class_id}_{day}"
+                )
+                model.add(sum(day_core_vars) >= 1).only_enforce_if(has_core)
+                model.add(sum(day_core_vars) == 0).only_enforce_if(has_core.negated())
+                missing = model.new_bool_var(
+                    f"core_miss_{constraint.id}_c{class_id}_{day}"
+                )
+                model.add(missing == 1 - has_core)
+                _add_soft_penalty(
+                    model, variables, constraint, missing,
+                    label=_class_label(data, class_id),
+                )
+
+
+# ---------------------------------------------------------------------------
 # Compiler dispatch table
 # ---------------------------------------------------------------------------
 
@@ -2021,4 +2118,5 @@ _COMPILERS = {
     RuleType.CLASS_END_TIME: _compile_class_end_time,
     RuleType.TEACHER_DAY_END_LIMIT: _compile_teacher_day_end_limit,
     RuleType.TEACHER_PREFERRED_FREE_DAY: _compile_teacher_preferred_free_day,
+    RuleType.DAILY_CORE_SUBJECTS: _compile_daily_core_subjects,
 }
